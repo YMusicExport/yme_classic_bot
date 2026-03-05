@@ -5,3 +5,4 @@ ids_yme.txt
 export_log.json
 active_users.txt
 inactive_users.txt
+.env
