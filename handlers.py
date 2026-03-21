@@ -123,13 +123,13 @@ def register_handlers(bot):
                 if (active + inactive) % 100 == 0:
                     progress_msg_id = _send_progress(bot, progress_msg_id, active + inactive, total)
                 try:
-                    temp = bot.send_message(user_id, "Информация", timeout=2)
-                    bot.delete_message(user_id, temp.message_id)
+                    bot.get_chat(user_id)
                     db.set_user_active(user_id, True)
                     active += 1
                 except Exception:
                     db.set_user_active(user_id, False)
                     inactive += 1
+                time.sleep(0.01)
 
             if progress_msg_id:
                 try:
