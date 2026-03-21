@@ -73,6 +73,6 @@ Available only to the user whose ID matches `ADMIN_ID`:
 - `/chat {user_id} {message}` — send message to a specific user
 - `/chat_all {message}` — broadcast to all users in DB
 - `/user_stats` — probe all users for reachability, update `is_active` in DB, send result files
-- `<text>` — set partner message (HTML supported)
+- `/set_promo <text>` — set partner message (HTML supported)
 - `/clear_promo` — disable partner message (reverts to donate message)
 - `/show_promo` — preview current partner message

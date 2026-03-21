@@ -12,18 +12,16 @@ def get_stats():
     def count_since(dt):
         return sum(1 for t in timestamps if t >= dt)
 
-    hour_ago = now - timedelta(hours=1)
     week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
     rows = [
-        ("⏱ Последний час",  count_since(hour_ago),    3600),
-        ("📅 Сегодня",        count_since(day_start),   (now - day_start).total_seconds()),
-        ("📅 Эта неделя",     count_since(week_start),  (now - week_start).total_seconds()),
-        ("📆 Этот месяц",     count_since(month_start), (now - month_start).total_seconds()),
-        ("📅 Этот год",       count_since(year_start),  (now - year_start).total_seconds()),
+        ("🟣 Сегодня",        count_since(day_start),   (now - day_start).total_seconds()),
+        ("🟣 Эта неделя",     count_since(week_start),  (now - week_start).total_seconds()),
+        ("🟣 Этот месяц",     count_since(month_start), (now - month_start).total_seconds()),
+        ("🟣 Этот год",       count_since(year_start),  (now - year_start).total_seconds()),
     ]
 
     lines = []
