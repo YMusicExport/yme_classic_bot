@@ -118,17 +118,21 @@ def register_handlers(bot):
             user_ids = db.get_all_user_ids()
             active = inactive = 0
             total = len(user_ids)
+            log.info(f"user_stats started, total: {total}")
 
             for user_id in user_ids:
-                if (active + inactive) % 100 == 0:
-                    progress_msg_id = _send_progress(bot, progress_msg_id, active + inactive, total)
+                done = active + inactive
+                if done % 100 == 0:
+                    progress_msg_id = _send_progress(bot, progress_msg_id, done, total)
                 try:
                     bot.get_chat(user_id)
                     db.set_user_active(user_id, True)
                     active += 1
-                except Exception:
+                    log.info(f"user_stats [{user_id}] active ({done + 1}/{total})")
+                except Exception as e:
                     db.set_user_active(user_id, False)
                     inactive += 1
+                    log.info(f"user_stats [{user_id}] inactive ({done + 1}/{total}): {e}")
                 time.sleep(0.01)
 
             if progress_msg_id:
