@@ -1,13 +1,18 @@
+import io
 import re
 import time
 from datetime import datetime
 from telebot import types
-from config import ADMIN_ID, IDS_FILE, ACTIVE_USERS_FILE, INACTIVE_USERS_FILE
+from config import ADMIN_ID
 from stats import get_stats
 from export import export_playlist
+from promo import get_promo, set_promo, clear_promo
+from logger import log
+import db
 
 RE_ADMIN_CHAT = re.compile(r"/chat\s+(\d+)\s+([\s\S]+)")
 RE_ADMIN_CHAT_ALL = re.compile(r"/chat_all\s+([\s\S]+)")
+RE_SET_PROMO = re.compile(r"/set_promo\s+([\s\S]+)")
 RE_UUID_PLAYLIST = re.compile(r"https://music\.yandex\.(ru|com|kz|by|uz)/playlists/\S+")
 RE_IFRAME_SRC = re.compile(r'src="https://music\.yandex\.(?:ru|com|kz|by|uz)/iframe/playlist/([^/]+)/([^"]+)"')
 RE_OLD_PLAYLIST_URL = re.compile(r"https://music\.yandex\..+/users/.+/playlists/.+")
@@ -16,7 +21,7 @@ user_feedback = {}
 
 
 def print_error(e, chat_id=0):
-    print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "|", "chat id is", chat_id, ">>>", e)
+    log.error(f"[{chat_id}] {e}")
 
 
 def _send_export_error(bot, message, e, bad_input_msg):
@@ -29,6 +34,13 @@ def _send_export_error(bot, message, e, bad_input_msg):
             "просматривать некоторые плейлисты (в основном «Любимое») таким образом.\n\n"
             "💡 Если не хотите ждать, можно попробовать экспортировать плейлист, запустив скрипт на вашем ПК. "
             "О том, как это сделать: https://teletype.in/@qleqs/yme"
+        )
+    elif any(kw in error_str for kw in ('ssl', 'connection', 'timeout', 'eof', 'max retries')):
+        bot.reply_to(
+            message,
+            "⚠️ Не удалось подключиться к Яндекс Музыке. Возможно, сервис временно недоступен.\n\n"
+            "💡 Попробуйте чуть позже или экспортируйте плейлист напрямую со своего ПК: "
+            "https://teletype.in/@qleqs/yme"
         )
     else:
         bot.reply_to(message, f"Ошибка! {bad_input_msg} Инструкция /start\n\nInfo: {e}")
@@ -52,19 +64,14 @@ def register_handlers(bot):
 
     @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.text == '/clean_ids')
     def clean_ids_file(message):
-        with open(IDS_FILE, 'r', encoding='utf-8') as f:
-            unique_ids = set(line.strip() for line in f)
-        with open(IDS_FILE, 'w', encoding='utf-8') as f:
-            f.write("\n".join(unique_ids) + "\n")
-        bot.send_message(message.chat.id, "📊 <b>Количество уникальных юзеров</b>", parse_mode="HTML")
-        with open(IDS_FILE, 'rb') as f:
-            bot.send_document(message.chat.id, f)
+        ids = db.get_all_user_ids()
+        bot.send_message(message.chat.id, f"📊 <b>Количество уникальных юзеров: {len(ids)}</b>", parse_mode="HTML")
 
     @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.text == '/admin_stats')
     def admin_stats(message):
-        bot.send_message(message.chat.id, f"📊 <b>Статистика успешных экспортов (с 01.03.26)</b>\n\n{get_stats()}", parse_mode="HTML")
+        bot.send_message(message.chat.id, f"📊 <b>Статистика успешных экспортов (с 21.03.26)</b>\n\n{get_stats()}", parse_mode="HTML")
 
-    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and RE_ADMIN_CHAT.match(m.text))
+    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and RE_ADMIN_CHAT.match(m.text or ""))
     def chat_with_user(message):
         match = RE_ADMIN_CHAT.match(message.text)
         chat_id, text = match.group(1), match.group(2)
@@ -75,16 +82,14 @@ def register_handlers(bot):
             print_error(e, message.chat.id)
             bot.send_message(message.chat.id, f"<b>Ошибка!</b> {e}", parse_mode="HTML")
 
-    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and RE_ADMIN_CHAT_ALL.match(m.text))
+    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and RE_ADMIN_CHAT_ALL.match(m.text or ""))
     def chat_all_users(message):
         text = RE_ADMIN_CHAT_ALL.match(message.text).group(1).strip()
         if not text:
             bot.send_message(message.chat.id, "Пожалуйста, введите сообщение для отправки.")
             return
 
-        with open(IDS_FILE, 'r', encoding='utf-8') as f:
-            user_ids = [line.strip() for line in f]
-
+        user_ids = db.get_all_user_ids()
         sent = failed = 0
         total = len(user_ids)
         progress_msg_id = None
@@ -108,14 +113,9 @@ def register_handlers(bot):
 
     @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.text == '/user_stats')
     def user_stats(message):
-        open(ACTIVE_USERS_FILE, 'w').close()
-        open(INACTIVE_USERS_FILE, 'w').close()
         progress_msg_id = None
-
         try:
-            with open(IDS_FILE, 'r', encoding='utf-8') as f:
-                user_ids = [line.strip() for line in f]
-
+            user_ids = db.get_all_user_ids()
             active = inactive = 0
             total = len(user_ids)
 
@@ -125,13 +125,11 @@ def register_handlers(bot):
                 try:
                     temp = bot.send_message(user_id, "Информация", timeout=2)
                     bot.delete_message(user_id, temp.message_id)
+                    db.set_user_active(user_id, True)
                     active += 1
-                    with open(ACTIVE_USERS_FILE, 'a', encoding='utf-8') as f:
-                        f.write(f"{user_id}\n")
                 except Exception:
+                    db.set_user_active(user_id, False)
                     inactive += 1
-                    with open(INACTIVE_USERS_FILE, 'a', encoding='utf-8') as f:
-                        f.write(f"{user_id}\n")
 
             if progress_msg_id:
                 try:
@@ -139,22 +137,61 @@ def register_handlers(bot):
                 except Exception:
                     pass
 
-            with open(ACTIVE_USERS_FILE, 'rb') as f:
-                bot.send_document(ADMIN_ID, f, caption="Список активных пользователей")
-            with open(INACTIVE_USERS_FILE, 'rb') as f:
-                bot.send_document(ADMIN_ID, f, caption="Список неактивных пользователей")
+            active_ids = db.get_active_user_ids()
+            inactive_ids = db.get_inactive_user_ids()
+
+            active_file = io.BytesIO("\n".join(str(i) for i in active_ids).encode())
+            active_file.name = "active_users.txt"
+            inactive_file = io.BytesIO("\n".join(str(i) for i in inactive_ids).encode())
+            inactive_file.name = "inactive_users.txt"
+
+            bot.send_document(ADMIN_ID, active_file, caption="Список активных пользователей")
+            bot.send_document(ADMIN_ID, inactive_file, caption="Список неактивных пользователей")
             bot.send_message(ADMIN_ID, f"Всего: {active + inactive}\nАктивно: {active}\nЗаблокировали: {inactive}")
 
         except Exception as e:
             print_error(e, message.chat.id)
             bot.send_message(message.chat.id, f"<b>Ошибка!</b> {e}", parse_mode="HTML")
 
+    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and RE_SET_PROMO.match(m.text or ""))
+    def admin_set_promo(message):
+        text = RE_SET_PROMO.match(message.text).group(1).strip()
+        set_promo(text)
+        bot.send_message(message.chat.id, f"✅ Партнёрское сообщение установлено:\n\n{text}", parse_mode="HTML")
+
+    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.text == '/clear_promo')
+    def admin_clear_promo(message):
+        clear_promo()
+        bot.send_message(message.chat.id, "🗑 Партнёрское сообщение удалено. Показывается сообщение о донате.")
+
+    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.text == '/show_promo')
+    def admin_show_promo(message):
+        promo = get_promo()
+        if promo:
+            bot.send_message(message.chat.id, f"📋 <b>Текущее партнёрское сообщение:</b>\n\n{promo}", parse_mode="HTML")
+        else:
+            bot.send_message(message.chat.id, "Партнёрское сообщение не задано. Показывается сообщение о донате.")
+
+    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.text == '/test_promo')
+    def admin_test_promo(message):
+        promo = get_promo()
+        if promo:
+            bot.send_message(message.chat.id, promo, parse_mode="HTML")
+        else:
+            bot.send_message(message.chat.id, "Партнёрское сообщение не задано — нечего тестировать.")
+
+    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.text == '/reset_promo')
+    def admin_reset_promo(message):
+        db.reset_promo_shown(message.chat.id)
+        bot.send_message(message.chat.id, "🔄 Флаг promo_shown сброшен. Следующий экспорт покажет промо.")
+
     # ── User ──────────────────────────────────────────────────────────────────
 
     @bot.message_handler(commands=['start'])
     def send_welcome(message):
-        with open(IDS_FILE, "a") as f:
-            f.write("\n" + str(message.chat.id))
+        is_new = db.add_user(message.chat.id)
+        if is_new:
+            log.info(f"new user [{message.chat.id}]")
         bot.send_message(
             message.chat.id,
             "<b>🎵 Экспорт Яндекс Музыки</b>\n\n"
@@ -174,7 +211,7 @@ def register_handlers(bot):
             parse_mode="HTML"
         )
         time.sleep(1)
-        bot.send_message(message.chat.id, "❗️❗️❗️ Если бот не работает, то используйте веб-версию: https://ymusicexport.ru или скрипт: https://teletype.in/@qleqs/yme")
+        # bot.send_message(message.chat.id, "❗️❗️❗️ Если бот не работает, то используйте веб-версию: https://ymusicexport.ru или скрипт: https://teletype.in/@qleqs/yme")
         bot.send_message(message.chat.id, "👇 Отправьте ссылку на плейлист")
 
     @bot.message_handler(commands=['feedback'])
@@ -240,7 +277,7 @@ def register_handlers(bot):
 
     # ── Export ────────────────────────────────────────────────────────────────
 
-    @bot.message_handler(func=lambda m: RE_UUID_PLAYLIST.match(m.text))
+    @bot.message_handler(func=lambda m: RE_UUID_PLAYLIST.match(m.text or ""))
     def handle_uuid_playlist(message):
         bot.send_message(
             message.chat.id,
@@ -255,7 +292,7 @@ def register_handlers(bot):
             parse_mode="HTML"
         )
 
-    @bot.message_handler(func=lambda m: 'iframe' in m.text and 'music.yandex.' in m.text and 'iframe/playlist' in m.text)
+    @bot.message_handler(func=lambda m: 'iframe' in (m.text or "") and 'music.yandex.' in (m.text or "") and 'iframe/playlist' in (m.text or ""))
     def handle_iframe(message):
         try:
             match = RE_IFRAME_SRC.search(message.text)
@@ -271,7 +308,7 @@ def register_handlers(bot):
     @bot.message_handler(func=lambda m: True)
     def handle_url(message):
         try:
-            if not RE_OLD_PLAYLIST_URL.match(message.text):
+            if not RE_OLD_PLAYLIST_URL.match(message.text or ""):
                 raise IndexError("Invalid URL")
             parts = message.text.strip().split('?')[0].split('/')
             owner, kinds = parts[4], parts[6]

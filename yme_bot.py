@@ -3,6 +3,7 @@ import telebot.apihelper
 from telebot import TeleBot
 from config import TOKEN
 from handlers import register_handlers, print_error
+import db
 
 
 class MyExceptionHandler(telebot.ExceptionHandler):
@@ -14,6 +15,8 @@ class MyExceptionHandler(telebot.ExceptionHandler):
         print_error(exception)
         return False
 
+
+db.init_db()
 
 bot = TeleBot(TOKEN, threaded=True, exception_handler=MyExceptionHandler())
 register_handlers(bot)

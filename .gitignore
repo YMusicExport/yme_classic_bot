@@ -1,8 +1,13 @@
 exported/
 __pycache__/
 .venv/
+.env
+bot.db
+bot.db-wal
+bot.db-shm
+promo.txt
 ids_yme.txt
+ids_yme.txt.migrated
 export_log.json
 active_users.txt
 inactive_users.txt
-.env

@@ -1,25 +1,9 @@
-import json
 from datetime import datetime, timedelta
-from config import EXPORT_LOG
-
-
-def load_export_log():
-    try:
-        with open(EXPORT_LOG, 'r') as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-
-def record_export():
-    timestamps = load_export_log()
-    timestamps.append(datetime.now().isoformat())
-    with open(EXPORT_LOG, 'w') as f:
-        json.dump(timestamps, f)
+import db
 
 
 def get_stats():
-    timestamps = [datetime.fromisoformat(t) for t in load_export_log()]
+    timestamps = db.get_export_timestamps()
     now = datetime.now()
 
     def rate(count, seconds):
@@ -35,11 +19,11 @@ def get_stats():
     year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
     rows = [
-        ("⏱ Последний час",  count_since(hour_ago),   3600),
-        ("📅 Сегодня",        count_since(day_start),  (now - day_start).total_seconds()),
-        ("📅 Эта неделя",     count_since(week_start), (now - week_start).total_seconds()),
-        ("📆 Этот месяц",     count_since(month_start),(now - month_start).total_seconds()),
-        ("📅 Этот год",       count_since(year_start), (now - year_start).total_seconds()),
+        ("⏱ Последний час",  count_since(hour_ago),    3600),
+        ("📅 Сегодня",        count_since(day_start),   (now - day_start).total_seconds()),
+        ("📅 Эта неделя",     count_since(week_start),  (now - week_start).total_seconds()),
+        ("📆 Этот месяц",     count_since(month_start), (now - month_start).total_seconds()),
+        ("📅 Этот год",       count_since(year_start),  (now - year_start).total_seconds()),
     ]
 
     lines = []
