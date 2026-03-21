@@ -1,6 +1,7 @@
 import io
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from telebot import types
 from config import ADMIN_ID
@@ -116,24 +117,20 @@ def register_handlers(bot):
         progress_msg_id = None
         try:
             user_ids = db.get_all_user_ids()
-            active = inactive = 0
             total = len(user_ids)
             log.info(f"user_stats started, total: {total}")
 
-            for user_id in user_ids:
-                done = active + inactive
-                if done % 100 == 0:
-                    progress_msg_id = _send_progress(bot, progress_msg_id, done, total)
+            def check_user(user_id):
                 try:
                     bot.get_chat(user_id)
                     db.set_user_active(user_id, True)
-                    active += 1
-                    log.info(f"user_stats [{user_id}] active ({done + 1}/{total})")
+                    log.info(f"user_stats [{user_id}] active")
                 except Exception as e:
                     db.set_user_active(user_id, False)
-                    inactive += 1
-                    log.info(f"user_stats [{user_id}] inactive ({done + 1}/{total}): {e}")
-                time.sleep(0.01)
+                    log.info(f"user_stats [{user_id}] inactive: {e}")
+
+            with ThreadPoolExecutor(max_workers=30) as executor:
+                executor.map(check_user, user_ids)
 
             if progress_msg_id:
                 try:
