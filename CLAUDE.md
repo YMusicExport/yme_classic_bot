@@ -59,11 +59,9 @@ After a successful export, `export.py` checks `db.is_promo_shown(chat_id)`:
 ## URL Formats Handled
 
 Three playlist link formats are detected via regex in `handlers.py`:
-1. Old-style: `https://music.yandex.{tld}/users/{owner}/playlists/{kinds}`
+1. Old-style: `https://music.yandex.{tld}/users/{owner}/playlists/{kinds}` // DEPRECATED, NOT SUPPORTED
 2. UUID playlist: `https://music.yandex.{tld}/playlists/{uuid}`
-3. HTML iframe embed: `<iframe src="https://music.yandex.{tld}/iframe/playlist/{owner}/{kinds}">`
-
-Supported TLDs: `.ru`, `.com`, `.kz`, `.by`, `.uz`
+3. HTML iframe embed: `<iframe src="https://music.yandex.{tld}/iframe/playlist/{owner}/{kinds}">`  // DEPRECATED, NOT SUPPORTED
 
 ## Admin Commands
 

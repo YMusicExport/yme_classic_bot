@@ -18,11 +18,7 @@ ADMIN_ID=your_telegram_id
 
 ## Usage
 
-Send the bot a link to a Yandex Music playlist in one of the following formats:
+Send the bot a link to a Yandex Music playlist in the following format:
 ```
-https://music.yandex.ru/users/USERNAME/playlists/ID
-```
-or HTML code from the playlist page:
-```html
-<iframe src="https://music.yandex.ru/iframe/...">
+https://music.yandex.ru/playlists/...
 ```

@@ -1,36 +1,39 @@
 import os
 import requests
 import time
+import re
 from datetime import datetime
 import db
 from promo import get_promo
 from logger import log
 
+RE_UUID_PLAYLIST = re.compile(r"(https?://)?music\.yandex\.[a-z]{2,}/playlists/([^/?]+)")
+RE_IFRAME_SRC = re.compile(r'src="(https?://)?music\.yandex\.[a-z]{2,}/iframe/playlist/([^/]+)/([^"]+)"')
+RE_OLD_PLAYLIST_URL = re.compile(r"(https?://)?music\.yandex\.[a-z]{2,}/users/.+/playlists/.+")
+
 os.makedirs("exported", exist_ok=True)
 
 
-def export_playlist(owner, kinds, message, bot):
+def export_playlist(message, bot):
     chat_id = message.chat.id
-    log.info(f"export start [{chat_id}] {owner}/{kinds}")
+    filename = ""
 
-    uri = f"https://music.yandex.ru/handlers/playlist.jsx?owner={owner}&kinds={kinds}"
-    with requests.Session() as session:
-        response = session.get(uri)
-    response.raise_for_status()
-
-    data = response.json()
-    playlist_title = data['playlist']['title']
-    tracks = data['playlist']['tracks']
-
-    content = ""
-    for track in tracks:
-        artists = ", ".join(artist['name'] for artist in track['artists'])
-        content += f"{artists} - {track['title']}\n"
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"exported/{playlist_title}_{message.chat.id}_{timestamp}.txt"
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(content)
+    if RE_UUID_PLAYLIST.match(message.text or ""):
+        bot.send_message(message.chat.id, "⏳ Экспортирую плейлист...")
+        log.info(f"export start [{chat_id}] {message.text}")
+        filename = export_playlist_uuid(message)
+    elif RE_OLD_PLAYLIST_URL.match(message.text or ""):
+        bot.send_message(message.chat.id,
+            "🔍 <b>Ссылка нового формата</b>\n\n"
+            "Для работы бота важно получить ссылку нового формата. Это просто:\n\n"
+            "1. Откройте ссылку в браузере\n"
+            "2. Дождитесь полной загрузки страницы\n"
+            "3. Из адресной строки скопируйте ссылку вида `https://music.yandex.ru/playlists/...`\n\n"
+            "Спасибо!",
+            parse_mode="HTML"
+        )
+    else:
+        raise IndexError("Invalid URL")
 
     with open(filename, 'rb') as f:
         bot.send_document(message.chat.id, f)
@@ -43,7 +46,7 @@ def export_playlist(owner, kinds, message, bot):
         parse_mode="HTML"
     )
 
-    log.info(f"export success [{chat_id}] \"{playlist_title}\" {len(tracks)} tracks")
+    log.info(f"export success [{chat_id}] - {message.text}")
     db.record_export(chat_id, filename)
 
     time.sleep(2)
@@ -57,3 +60,32 @@ def export_playlist(owner, kinds, message, bot):
             message.chat.id,
             "Это бесплатный проект, который делает и поддерживает один человек. Если оказался полезным — буду рад поддержке 💜 https://aleqsanbr.dev"
         )
+
+
+def export_playlist_uuid(message):
+    m = RE_UUID_PLAYLIST.search(message.text)
+
+    if not m:
+        raise IndexError("Invalid URL")
+
+    playlist_uuid = m.group(2)
+
+    response = requests.get(f'https://api.music.yandex.ru/playlist/{playlist_uuid}')
+    response.raise_for_status()
+
+    data = response.json()
+    playlist_title = data['result']['title']
+    tracks = data['result']['tracks']
+
+    tracks_lines = [
+        f"{', '.join(artist['name'] for artist in track['track']['artists'])} - {track['track']['title']}"
+        for track in tracks
+    ]
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"exported/{playlist_title}_{message.chat.id}_{timestamp}.txt"
+    with open(filename, 'w', encoding='utf-8') as f:
+        for track in tracks_lines:
+            f.write(track + "\n")
+
+    return filename

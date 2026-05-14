@@ -2,7 +2,6 @@ import io
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 from telebot import types
 from config import ADMIN_ID
 from stats import get_stats
@@ -14,9 +13,6 @@ import db
 RE_ADMIN_CHAT = re.compile(r"/chat\s+(\d+)\s+([\s\S]+)")
 RE_ADMIN_CHAT_ALL = re.compile(r"/chat_all\s+([\s\S]+)")
 RE_SET_PROMO = re.compile(r"/set_promo\s+([\s\S]+)")
-RE_UUID_PLAYLIST = re.compile(r"https://music\.yandex\.(ru|com|kz|by|uz)/playlists/\S+")
-RE_IFRAME_SRC = re.compile(r'src="https://music\.yandex\.(?:ru|com|kz|by|uz)/iframe/playlist/([^/]+)/([^"]+)"')
-RE_OLD_PLAYLIST_URL = re.compile(r"https://music\.yandex\..+/users/.+/playlists/.+")
 
 user_feedback = {}
 
@@ -44,7 +40,7 @@ def _send_export_error(bot, message, e, bad_input_msg):
             "https://teletype.in/@qleqs/yme"
         )
     else:
-        bot.reply_to(message, f"Ошибка! {bad_input_msg} Инструкция /start\n\nInfo: {e}")
+        bot.reply_to(message, f"Ошибка! {bad_input_msg}. На всякий случай проверьте правильность ссылки и то, что плейлист не приватный. Инструкция /start\n\nInfo: {e}")
     bot.send_message(message.chat.id, "📨 Вопросы, идеи, предложения? /feedback")
 
 
@@ -148,7 +144,6 @@ def register_handlers(bot):
 
             bot.send_document(ADMIN_ID, active_file, caption="Список активных пользователей")
             bot.send_document(ADMIN_ID, inactive_file, caption="Список неактивных пользователей")
-            bot.send_message(ADMIN_ID, f"Всего: {active + inactive}\nАктивно: {active}\nЗаблокировали: {inactive}")
 
         except Exception as e:
             print_error(e, message.chat.id)
@@ -200,8 +195,7 @@ def register_handlers(bot):
             "в формате: ИСПОЛНИТЕЛЬ - НАЗВАНИЕ ТРЕКА.\n\n"
             "<b>📝 Как пользоваться:</b>\n"
             "1. Скопируйте ссылку на плейлист вида:\n"
-            "<code>https://music.yandex.ru/users/USERNAME/playlists/ID</code>\n"
-            "Либо используйте HTML-код (подробнее: https://link.u-pov.ru/ymelnk)\n\n"
+            "<code>https://music.yandex.ru/playlists/...\n\n"
             "2. Отправьте ссылку боту\n\n"
             "<b>⚠️ Важно:</b>\n"
             "• Плейлист должен быть <u>публичным</u> (не приватным)\n"
@@ -278,43 +272,10 @@ def register_handlers(bot):
 
     # ── Export ────────────────────────────────────────────────────────────────
 
-    @bot.message_handler(func=lambda m: RE_UUID_PLAYLIST.match(m.text or ""))
-    def handle_uuid_playlist(message):
-        bot.send_message(
-            message.chat.id,
-            "🔍 <b>Ссылка нового формата</b>\n\n"
-            "Такие ссылки нужно конвертировать. Это просто:\n\n"
-            "1. Откройте ссылку в браузере\n"
-            "2. Нажмите «Поделиться» → «HTML код»\n"
-            "3. Скопируйте код и отправьте сюда\n\n"
-            "Должно получиться примерно так:\n"
-            "<code>&lt;iframe src=\"https://music.yandex.ru/iframe/...\"&gt;</code>\n\n"
-            "📖 Подробная инструкция: https://u-pov.ru/instructions/aleqs/1377",
-            parse_mode="HTML"
-        )
-
-    @bot.message_handler(func=lambda m: 'iframe' in (m.text or "") and 'music.yandex.' in (m.text or "") and 'iframe/playlist' in (m.text or ""))
-    def handle_iframe(message):
-        try:
-            match = RE_IFRAME_SRC.search(message.text)
-            if not match:
-                raise ValueError("Не удалось найти ссылку на плейлист в iframe")
-            owner, kinds = match.group(1), match.group(2)
-            bot.send_message(message.chat.id, "⏳ Экспортирую плейлист...")
-            export_playlist(owner, kinds, message, bot)
-        except Exception as e:
-            print_error(e, message.chat.id)
-            _send_export_error(bot, message, e, "Проверьте правильность HTML кода и попробуйте ещё раз.")
-
     @bot.message_handler(func=lambda m: True)
     def handle_url(message):
         try:
-            if not RE_OLD_PLAYLIST_URL.match(message.text or ""):
-                raise IndexError("Invalid URL")
-            parts = message.text.strip().split('?')[0].split('/')
-            owner, kinds = parts[4], parts[6]
-            bot.send_message(message.chat.id, "⏳ Экспортирую плейлист...")
-            export_playlist(owner, kinds, message, bot)
+            export_playlist(message, bot)
         except Exception as e:
             print_error(e, message.chat.id)
             _send_export_error(bot, message, e, "Проверьте правильность ссылки и попробуйте ещё раз.")
