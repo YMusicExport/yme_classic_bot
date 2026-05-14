@@ -10,7 +10,7 @@ from promo import get_promo, set_promo, clear_promo
 from logger import log
 import db
 
-RE_ADMIN_CHAT = re.compile(r"/chat\s+(\d+)\s+([\s\S]+)")
+RE_ADMIN_CHAT = re.compile(r"/chat\s+((?:\d+\s+)*\d+)\s+([\s\S]+)")
 RE_ADMIN_CHAT_ALL = re.compile(r"/chat_all\s+([\s\S]+)")
 RE_SET_PROMO = re.compile(r"/set_promo\s+([\s\S]+)")
 
@@ -71,13 +71,20 @@ def register_handlers(bot):
     @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and RE_ADMIN_CHAT.match(m.text or ""))
     def chat_with_user(message):
         match = RE_ADMIN_CHAT.match(message.text)
-        chat_id, text = match.group(1), match.group(2)
-        try:
-            bot.send_message(chat_id, f"<b>📩 Сообщение от админа</b>\n\n{text}", parse_mode="HTML")
-            bot.send_message(message.chat.id, f"<b>Было отправлено сообщение:</b>\n\n{text}", parse_mode="HTML")
-        except Exception as e:
-            print_error(e, message.chat.id)
-            bot.send_message(message.chat.id, f"<b>Ошибка!</b> {e}", parse_mode="HTML")
+        ids_str, text = match.group(1), match.group(2)
+        ids = [i for i in ids_str.split() if i.isdigit()]
+        if not ids:
+            bot.send_message(message.chat.id, "Пожалуйста, укажите корректные id пользователей.")
+            return
+        sent = failed = 0
+        for chat_id in ids:
+            try:
+                bot.send_message(int(chat_id), f"<b>📩 Сообщение от админа</b>\n\n{text}", parse_mode="HTML")
+                sent += 1
+            except Exception as e:
+                print_error(e, chat_id)
+                failed += 1
+        bot.send_message(message.chat.id, f"<b>Было отправлено сообщений:</b> {sent}\n<b>Не удалось отправить:</b> {failed}", parse_mode="HTML")
 
     @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and RE_ADMIN_CHAT_ALL.match(m.text or ""))
     def chat_all_users(message):
