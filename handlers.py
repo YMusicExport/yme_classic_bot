@@ -40,7 +40,7 @@ def _send_export_error(bot, message, e, bad_input_msg):
             "https://teletype.in/@qleqs/yme"
         )
     else:
-        bot.reply_to(message, f"Ошибка! {bad_input_msg}. На всякий случай проверьте правильность ссылки и то, что плейлист не приватный. Инструкция /start\n\nInfo: {e}")
+        bot.reply_to(message, f"Ошибка! {bad_input_msg} Инструкция /start\n\nInfo: {e}")
     bot.send_message(message.chat.id, "📨 Вопросы, идеи, предложения? /feedback")
 
 
@@ -223,7 +223,7 @@ def register_handlers(bot):
         markup.add(types.KeyboardButton("Отправить"), types.KeyboardButton("Отмена"))
         bot.send_message(
             message.chat.id,
-            "📝 Напишите сообщение и прикрепите файлы (если нужно).\n\n"
+            "📝 Напишите сообщение и прикрепите файлы (если нужно). Пожалуйста, не присылайте голые ссылки без комментариев — я не знаю, что с ними делать)) Также по возможности присылайте полное сообщение об ошибке, если не получается экспортировать плейлист.\n\n"
             "⚠️ <b>Когда закончите — нажмите кнопку «Отправить»</b>\n\n"
             "<i>Не видите кнопку? Нажмите на значок клавиатуры (☰) внизу экрана</i>",
             reply_markup=markup,

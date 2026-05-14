@@ -28,10 +28,12 @@ def export_playlist(message, bot):
             "Для работы бота важно получить ссылку нового формата. Это просто:\n\n"
             "1. Откройте ссылку в браузере\n"
             "2. Дождитесь полной загрузки страницы\n"
-            "3. Из адресной строки скопируйте ссылку вида `https://music.yandex.ru/playlists/...`\n\n"
+            "3. Из адресной строки скопируйте ссылку вида <code>https://music.yandex.ru/playlists/...</code>\n\n"
             "Спасибо!",
             parse_mode="HTML"
         )
+
+        return
     else:
         raise IndexError("Invalid URL")
 
