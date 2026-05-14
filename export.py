@@ -35,7 +35,7 @@ def export_playlist(message, bot):
 
         return
     else:
-        raise IndexError("Invalid URL")
+        raise IndexError(f"Invalid URL: {message.text}")
 
     with open(filename, 'rb') as f:
         bot.send_document(message.chat.id, f)
