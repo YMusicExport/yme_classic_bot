@@ -24,7 +24,7 @@ def export_playlist(message, bot):
         filename = export_playlist_uuid(message)
     elif RE_OLD_PLAYLIST_URL.match(message.text or ""):
         bot.send_message(message.chat.id,
-            "🔍 <b>Ссылка нового формата</b>\n\n"
+            "🔍 <b>Ссылка старого формата</b>\n\n"
             "Для работы бота важно получить ссылку нового формата. Это просто:\n\n"
             "1. Откройте ссылку в браузере\n"
             "2. Дождитесь полной загрузки страницы\n"
