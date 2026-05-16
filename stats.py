@@ -2,8 +2,8 @@ from datetime import datetime, timedelta
 import db
 
 
-def get_stats():
-    timestamps = db.get_export_timestamps()
+async def get_stats():
+    timestamps = await db.get_export_timestamps()
     now = datetime.now()
 
     def rate(count, seconds):

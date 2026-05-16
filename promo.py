@@ -1,20 +1,21 @@
+import aiofiles
 from config import PROMO_FILE
 
 
-def get_promo() -> str | None:
+async def get_promo() -> str | None:
     try:
-        with open(PROMO_FILE, 'r', encoding='utf-8') as f:
-            text = f.read().strip()
+        async with aiofiles.open(PROMO_FILE, 'r', encoding='utf-8') as f:
+            text = (await f.read()).strip()
         return text if text else None
     except FileNotFoundError:
         return None
 
 
-def set_promo(text: str):
-    with open(PROMO_FILE, 'w', encoding='utf-8') as f:
-        f.write(text.strip())
+async def set_promo(text: str):
+    async with aiofiles.open(PROMO_FILE, 'w', encoding='utf-8') as f:
+        await f.write(text.strip())
 
 
-def clear_promo():
-    with open(PROMO_FILE, 'w', encoding='utf-8') as f:
-        f.write("")
+async def clear_promo():
+    async with aiofiles.open(PROMO_FILE, 'w', encoding='utf-8') as f:
+        await f.write("")
