@@ -23,6 +23,17 @@ def export_playlist(message, bot):
         bot.send_message(message.chat.id, "⏳ Экспортирую плейлист...")
         log.info(f"export start [{chat_id}] {message.text}")
         filename = export_playlist_uuid(message)
+    elif RE_IFRAME_SRC.search(message.text or ""):
+        bot.send_message(message.chat.id,
+            "🔍 <b>Обнаружен iframe-код</b>\n\n"
+            "Для работы бота нужна ссылка нового формата. Это просто:\n\n"
+            "1. Откройте плейлист в браузере\n"
+            "2. Дождитесь полной загрузки страницы\n"
+            "3. Из адресной строки скопируйте ссылку вида <code>https://music.yandex.ru/playlists/...</code>\n\n"
+            "Спасибо!",
+            parse_mode="HTML"
+        )
+        return
     elif RE_OLD_PLAYLIST_URL.match(message.text or ""):
         bot.send_message(message.chat.id,
             "🔍 <b>Ссылка старого формата</b>\n\n"
@@ -33,7 +44,6 @@ def export_playlist(message, bot):
             "Спасибо!",
             parse_mode="HTML"
         )
-
         return
     else:
         raise IndexError(f"Invalid URL: {message.text}")
