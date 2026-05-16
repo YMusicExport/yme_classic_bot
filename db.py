@@ -1,3 +1,4 @@
+import secrets
 import aiosqlite
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -33,6 +34,12 @@ async def init_db():
                 exported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_exports_exported_at ON exports(exported_at);
+            CREATE TABLE IF NOT EXISTS errors (
+                error_id   TEXT PRIMARY KEY,
+                chat_id    INTEGER,
+                message    TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             PRAGMA journal_mode=WAL;
         """)
         try:
@@ -151,3 +158,26 @@ async def get_export_timestamps() -> list[datetime]:
             elif isinstance(val, datetime):
                 result.append(val)
     return result
+
+
+# ── Errors ─────────────────────────────────────────────────────────────────────
+
+async def save_error(chat_id: int, message: str, context: str = "") -> str:
+    error_id = secrets.token_hex(3).upper()
+    full = f"{message}\n\n--- context ---\n{context}" if context else message
+    async with _conn() as con:
+        await con.execute(
+            "INSERT INTO errors (error_id, chat_id, message) VALUES (?, ?, ?)",
+            (error_id, chat_id, full)
+        )
+    return error_id
+
+
+async def get_error(error_id: str) -> dict | None:
+    async with _conn() as con:
+        rows = await con.execute(
+            "SELECT error_id, chat_id, message, created_at FROM errors WHERE error_id = ?",
+            (error_id.upper(),)
+        )
+        row = await rows.fetchone()
+    return dict(row) if row else None

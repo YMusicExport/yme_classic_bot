@@ -22,7 +22,7 @@ def print_error(e, chat_id=0):
     log.error(f"[{chat_id}] {e}")
 
 
-async def _send_export_error(bot, message, e, bad_input_msg):
+async def _send_export_error(bot, message, e, bad_input_msg, _error_id: str = ""):
     error_str = str(e).lower()
     if 'tracks' in error_str or 'artists' in error_str:
         await bot.reply_to(
@@ -40,7 +40,7 @@ async def _send_export_error(bot, message, e, bad_input_msg):
             link_preview_options=types.LinkPreviewOptions(is_disabled=True)
         )
     else:
-        await bot.reply_to(message, f"Ошибка! {bad_input_msg} Инструкция /start\n\nInfo: {e}")
+        await bot.reply_to(message, f"Ошибка! {bad_input_msg} Инструкция /start\n\nКод ошибки: <code>{_error_id}</code>", parse_mode="HTML")
     await bot.send_message(message.chat.id, "📨 Вопросы, идеи, предложения? /feedback")
 
 
@@ -166,6 +166,22 @@ def register_handlers(bot):
         else:
             await bot.send_message(message.chat.id, "Партнёрское сообщение не задано. Показывается сообщение о донате.")
 
+    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and (m.text or "").startswith('/error '))
+    async def admin_get_error(message):
+        error_id = message.text.split(maxsplit=1)[1].strip()
+        error = await db.get_error(error_id)
+        if not error:
+            await bot.send_message(message.chat.id, f"Ошибка <code>{error_id}</code> не найдена.", parse_mode="HTML")
+            return
+        await bot.send_message(
+            message.chat.id,
+            f"🔴 <b>{error['error_id']}</b>\n"
+            f"👤 chat_id: <code>{error['chat_id']}</code>\n"
+            f"🕐 {error['created_at']}\n\n"
+            f"<pre>{error['message']}</pre>",
+            parse_mode="HTML"
+        )
+
     @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.text == '/test_promo')
     async def admin_test_promo(message):
         promo = await get_promo()
@@ -211,7 +227,7 @@ def register_handlers(bot):
         markup.add(types.KeyboardButton("Отправить"), types.KeyboardButton("Отмена"))
         await bot.send_message(
             message.chat.id,
-            "📝 Напишите сообщение и прикрепите файлы (если нужно). Пожалуйста, не присылайте голые ссылки без комментариев — я не знаю, что с ними делать)) Также по возможности присылайте полное сообщение об ошибке, если не получается экспортировать плейлист.\n\n"
+            "📝 Напишите сообщение и прикрепите файлы (если нужно). Пожалуйста, не присылайте голые ссылки без комментариев и комменатрии без ссылок — я не знаю, что с ними делать)) Укажите, пожалуйста, код ошибки, если бот вам его прислал.\n\n"
             "⚠️ <b>Когда закончите — нажмите кнопку «Отправить»</b>\n\n"
             "<i>Не видите кнопку? Нажмите на значок клавиатуры (☰) внизу экрана</i>",
             reply_markup=markup,
@@ -297,7 +313,8 @@ def register_handlers(bot):
             log.info(f"ym login success [{chat_id}]")
         except Exception as e:
             log.error(f"ym login error [{chat_id}]: {e}")
-            await bot.send_message(chat_id, f"❌ Ошибка авторизации: {e}")
+            error_id = await db.save_error(chat_id, str(e))
+            await bot.send_message(chat_id, f"❌ Ошибка авторизации. Код: <code>{error_id}</code>", parse_mode="HTML")
 
     @bot.message_handler(commands=['logout'])
     async def logout(message):
@@ -353,7 +370,10 @@ def register_handlers(bot):
             await bot.send_message(call.message.chat.id, "⚠️ Плейлист не найден")
         except Exception as e:
             print_error(e, call.message.chat.id)
-            await bot.send_message(call.message.chat.id, f"❌ Ошибка экспорта: {e}")
+            logged_in = bool(await db.get_ym_token(call.message.chat.id))
+            context = f"kind: {kind}\nowner_uid: {owner_uid}\nlogged_in: {logged_in}"
+            error_id = await db.save_error(call.message.chat.id, str(e), context)
+            await bot.send_message(call.message.chat.id, f"❌ Ошибка экспорта. Код: <code>{error_id}</code>", parse_mode="HTML")
 
     # ── Export ────────────────────────────────────────────────────────────────
 
@@ -373,4 +393,7 @@ def register_handlers(bot):
             await bot.reply_to(message, "⚠️ Плейлист не найден. Проверьте ссылку или убедитесь, что плейлист не удалён")
         except Exception as e:
             print_error(e, message.chat.id)
-            await _send_export_error(bot, message, e, "Проверьте правильность ссылки и попробуйте ещё раз. Используйте /login для экспорта через ваш аккаунт Яндекс Музыки, если еще не вошли.")
+            logged_in = bool(await db.get_ym_token(message.chat.id))
+            context = f"message: {message.text}\nlogged_in: {logged_in}"
+            error_id = await db.save_error(message.chat.id, str(e), context)
+            await _send_export_error(bot, message, e, "Проверьте правильность ссылки и попробуйте ещё раз.", _error_id=error_id)
