@@ -77,13 +77,8 @@ def export_playlist_uuid(message):
     response.raise_for_status()
 
     data = response.json()
-    playlist_title = data['result']['title']
-    tracks = data['result']['tracks']
-
-    tracks_lines = [
-        f"{', '.join(artist['name'] for artist in track['track']['artists'])} - {track['track']['title']}"
-        for track in tracks
-    ]
+    playlist_title = data['title']
+    tracks_lines = data['tracks']
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"exported/{playlist_title}_{message.chat.id}_{timestamp}.txt"
