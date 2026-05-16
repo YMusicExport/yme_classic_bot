@@ -5,6 +5,7 @@ load_dotenv()
 
 TOKEN = os.environ['TOKEN']
 ADMIN_ID = int(os.environ['ADMIN_ID'])
+PLAYLIST_API_URL = os.environ['PLAYLIST_API_URL']
 
 EXPORT_LOG = 'export_log.json'
 IDS_FILE = 'ids_yme.txt'

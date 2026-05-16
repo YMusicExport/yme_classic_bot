@@ -4,6 +4,7 @@ import time
 import re
 from datetime import datetime
 import db
+from config import PLAYLIST_API_URL
 from promo import get_promo
 from logger import log
 
@@ -72,7 +73,7 @@ def export_playlist_uuid(message):
 
     playlist_uuid = m.group(2)
 
-    response = requests.get(f'https://api.music.yandex.ru/playlist/{playlist_uuid}')
+    response = requests.get(f'{PLAYLIST_API_URL}?uuid={playlist_uuid}')
     response.raise_for_status()
 
     data = response.json()
