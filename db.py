@@ -21,11 +21,13 @@ async def init_db():
     async with _conn() as con:
         await con.executescript("""
             CREATE TABLE IF NOT EXISTS users (
-                chat_id     INTEGER PRIMARY KEY,
-                first_seen  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_active   INTEGER DEFAULT 1,
-                promo_shown INTEGER DEFAULT 0,
-                ym_token    TEXT
+                chat_id       INTEGER PRIMARY KEY,
+                first_seen    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active     INTEGER DEFAULT 1,
+                promo_shown   INTEGER DEFAULT 0,
+                ym_token      TEXT,
+                need_duration INTEGER,
+                need_numbering INTEGER
             );
             CREATE TABLE IF NOT EXISTS exports (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,11 +44,12 @@ async def init_db():
             );
             PRAGMA journal_mode=WAL;
         """)
-        try:
-            await con.execute("ALTER TABLE users ADD COLUMN ym_token TEXT")
-            await con.commit()
-        except Exception:
-            pass
+        for col in ("ym_token TEXT", "need_duration INTEGER", "need_numbering INTEGER"):
+            try:
+                await con.execute(f"ALTER TABLE users ADD COLUMN {col}")
+                await con.commit()
+            except Exception:
+                pass
 
 
 # ── Users ──────────────────────────────────────────────────────────────────────
@@ -135,6 +138,27 @@ async def get_ym_token(chat_id: int) -> str | None:
         )
         row = await rows.fetchone()
     return row["ym_token"] if row else None
+
+
+# ── Settings ───────────────────────────────────────────────────────────────────
+
+async def get_user_settings(chat_id: int) -> dict:
+    async with _conn() as con:
+        rows = await con.execute(
+            "SELECT need_duration, need_numbering FROM users WHERE chat_id = ?", (chat_id,)
+        )
+        row = await rows.fetchone()
+    if not row:
+        return {"need_duration": None, "need_numbering": None}
+    return {"need_duration": row["need_duration"], "need_numbering": row["need_numbering"]}
+
+
+async def set_user_settings(chat_id: int, need_duration: int, need_numbering: int):
+    async with _conn() as con:
+        await con.execute(
+            "UPDATE users SET need_duration = ?, need_numbering = ? WHERE chat_id = ?",
+            (need_duration, need_numbering, chat_id),
+        )
 
 
 # ── Exports ────────────────────────────────────────────────────────────────────

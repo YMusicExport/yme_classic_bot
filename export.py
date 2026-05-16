@@ -21,6 +21,9 @@ os.makedirs("exported", exist_ok=True)
 
 async def export_playlist(bot, chat_id: int, *, message=None, kind=None, owner_uid=None):
     token = await db.get_ym_token(chat_id)
+    settings = await db.get_user_settings(chat_id)
+    need_duration = bool(settings.get("need_duration") or 0)
+    need_numbering = bool(settings.get("need_numbering") or 0)
 
     if message is not None:
         text = message.text or ""
@@ -30,9 +33,9 @@ async def export_playlist(bot, chat_id: int, *, message=None, kind=None, owner_u
             log.info(f"export start [{chat_id}] {text}")
             playlist_uuid = RE_UUID_PLAYLIST.search(text).group(2)
             filename = await (
-                _fetch_by_url_api(playlist_uuid, token, chat_id)
+                _fetch_by_url_api(playlist_uuid, token, chat_id, need_duration, need_numbering)
                 if token
-                else _fetch_by_url_anon(playlist_uuid, chat_id)
+                else _fetch_by_url_anon(playlist_uuid, chat_id, need_duration, need_numbering)
             )
 
         elif RE_OLD_PLAYLIST_URL.match(text):
@@ -54,13 +57,20 @@ async def export_playlist(bot, chat_id: int, *, message=None, kind=None, owner_u
     else:
         await bot.send_message(chat_id, "⏳ Экспортирую плейлист...")
         log.info(f"export start [{chat_id}] kind={kind} owner={owner_uid}")
-        filename = await _fetch_by_kind(kind, owner_uid, token, chat_id)
+        filename = await _fetch_by_kind(kind, owner_uid, token, chat_id, need_duration, need_numbering)
 
     await _finish_export(chat_id, bot, filename)
 
 
-async def _fetch_by_url_anon(playlist_uuid: str, chat_id: int) -> str:
-    response = await asyncio.to_thread(requests.get, f"{PLAYLIST_API_URL}?uuid={playlist_uuid}")
+async def _fetch_by_url_anon(playlist_uuid: str, chat_id: int, need_duration: bool, need_numbering: bool) -> str:
+    url = (
+        f"{PLAYLIST_API_URL}?uuid={playlist_uuid}"
+        f"&duration={1 if need_duration else 0}"
+        f"&numbering={1 if need_numbering else 0}"
+    )
+    response = await asyncio.to_thread(requests.get, url)
+    if not response.ok:
+        log.error(f"anon fetch [{chat_id}] HTTP {response.status_code}: {response.text[:300]}")
     response.raise_for_status()
 
     data = response.json()
@@ -72,34 +82,40 @@ async def _fetch_by_url_anon(playlist_uuid: str, chat_id: int) -> str:
     return filename
 
 
-async def _fetch_by_url_api(playlist_uuid: str, token: str, chat_id: int) -> str:
+async def _fetch_by_url_api(playlist_uuid: str, token: str, chat_id: int, need_duration: bool, need_numbering: bool) -> str:
     client = await ClientAsync(token).init()
     playlist = await client.playlist(playlist_uuid)
 
     if not playlist:
         raise NotFoundError
 
-    return await _playlist_to_file(playlist, chat_id)
+    return await _playlist_to_file(playlist, chat_id, need_duration, need_numbering)
 
 
-async def _fetch_by_kind(kind: int, owner_uid: int, token: str, chat_id: int) -> str:
+async def _fetch_by_kind(kind: int, owner_uid: int, token: str, chat_id: int, need_duration: bool, need_numbering: bool) -> str:
     client = await ClientAsync(token).init()
     playlist = await client.users_playlists(kind, owner_uid)
 
     if not playlist:
         raise NotFoundError
 
-    return await _playlist_to_file(playlist, chat_id)
+    return await _playlist_to_file(playlist, chat_id, need_duration, need_numbering)
 
 
-async def _playlist_to_file(playlist, chat_id: int) -> str:
+async def _playlist_to_file(playlist, chat_id: int, need_duration: bool, need_numbering: bool) -> str:
     track_lines = []
-    for ts in playlist.tracks or []:
+    for i, ts in enumerate(playlist.tracks or [], 1):
         track = ts.track
         if track is None:
             continue
         artists = ", ".join(a.name for a in (track.artists or []))
-        track_lines.append(f"{artists} - {track.title}")
+        line = f"{artists} - {track.title}"
+        if need_duration:
+            dur_s = (track.duration_ms or 0) // 1000
+            line += f" [{dur_s // 60}:{dur_s % 60:02d}]"
+        if need_numbering:
+            line = f"{i}. {line}"
+        track_lines.append(line)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_title = re.sub(r"[^\w\s\-]", "", playlist.title or "playlist").strip()

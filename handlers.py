@@ -16,6 +16,136 @@ RE_ADMIN_CHAT_ALL = re.compile(r"/chat_all\s+([\s\S]+)")
 RE_SET_PROMO = re.compile(r"/set_promo\s+([\s\S]+)")
 
 user_feedback = {}
+_pending_dur: dict[int, int] = {}   # chat_id → need_duration ответ на шаге 1
+_pending_exp: dict[int, dict] = {}  # chat_id → export kwargs, ждущие настроек
+
+
+async def _settings_flow(bot, chat_id: int, *, call=None, export_kwargs: dict | None = None):
+    """Двухшаговый флоу настроек.
+
+    Старт флоу: вызвать с export_kwargs (None = /settings без экспорта).
+    Шаг 1 → 2: вызвать с call, data начинается на 'set_dur:'.
+    Шаг 2 → сохранение + экспорт: вызвать с call, data начинается на 'set_num:'.
+    """
+    if export_kwargs is not None:
+        if export_kwargs:
+            _pending_exp[chat_id] = export_kwargs
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("Да", callback_data="set_dur:1"),
+            types.InlineKeyboardButton("Нет", callback_data="set_dur:0"),
+        )
+        await bot.send_message(
+            chat_id,
+            "⚙️ <b>Настройки экспорта</b>\n\nВключать длительность треков в файл?\n\n"
+            "Пример: <code>Melanie C - Rock Me [3:12]</code>",
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+    elif call.data.startswith("set_dur:"):
+        _pending_dur[chat_id] = int(call.data.split(":")[1])
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("Да", callback_data="set_num:1"),
+            types.InlineKeyboardButton("Нет", callback_data="set_num:0"),
+        )
+        await bot.edit_message_text(
+            "⚙️ Включать нумерацию треков в файл?\n\nПример: <code>1. Melanie C - Rock Me</code>",
+            chat_id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+    elif call.data.startswith("set_num:"):
+        need_dur = _pending_dur.pop(chat_id, 0)
+        need_num = int(call.data.split(":")[1])
+        await db.set_user_settings(chat_id, need_dur, need_num)
+        await bot.edit_message_text(
+            f"✅ Настройки сохранены:\n• Длительность: {'да' if need_dur else 'нет'}\n"
+            f"• Нумерация: {'да' if need_num else 'нет'}\n\nИзменить: /settings",
+            chat_id,
+            call.message.message_id,
+        )
+        kwargs = _pending_exp.pop(chat_id, None)
+        if kwargs:
+            await export_playlist(bot, chat_id, **kwargs)
+pending_settings: dict[int, int] = {}   # chat_id → pending need_duration value
+pending_export: dict[int, dict] = {}    # chat_id → export kwargs
+
+
+def _duration_markup() -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("Да", callback_data="set_dur:1"),
+        types.InlineKeyboardButton("Нет", callback_data="set_dur:0"),
+    )
+    return markup
+
+
+def _numbering_markup() -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("Да", callback_data="set_num:1"),
+        types.InlineKeyboardButton("Нет", callback_data="set_num:0"),
+    )
+    return markup
+
+
+async def _ask_duration(bot, chat_id: int):
+    await bot.send_message(
+        chat_id,
+        "⚙️ <b>Настройки экспорта</b>\n\nВключать длительность треков в файл?\n\nПример: <code>Melanie C - Rock Me [3:12]</code>",
+        parse_mode="HTML",
+        reply_markup=_duration_markup(),
+    )
+
+
+async def _ask_numbering(bot, chat_id: int, message_id: int):
+    await bot.edit_message_text(
+        "⚙️ Включать нумерацию треков в файл?\n\nПример: <code>1. Melanie C - Rock Me</code>",
+        chat_id,
+        message_id,
+        parse_mode="HTML",
+        reply_markup=_numbering_markup(),
+    )
+pending_settings: dict[int, int] = {}  # chat_id → pending need_duration value
+
+
+def _duration_markup() -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("Да", callback_data="set_dur:1"),
+        types.InlineKeyboardButton("Нет", callback_data="set_dur:0"),
+    )
+    return markup
+
+
+def _numbering_markup() -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("Да", callback_data="set_num:1"),
+        types.InlineKeyboardButton("Нет", callback_data="set_num:0"),
+    )
+    return markup
+
+
+async def _ask_duration(bot, chat_id: int):
+    await bot.send_message(
+        chat_id,
+        "⚙️ <b>Настройки экспорта</b>\n\nВключать длительность треков в файл?\n\nПример: <code>Melanie C - Rock Me [3:12]</code>",
+        parse_mode="HTML",
+        reply_markup=_duration_markup(),
+    )
+
+
+async def _ask_numbering(bot, chat_id: int, message_id: int):
+    await bot.edit_message_text(
+        "⚙️ Включать нумерацию треков в файл?\n\nПример: <code>1. Melanie C - Rock Me</code>",
+        chat_id,
+        message_id,
+        parse_mode="HTML",
+        reply_markup=_numbering_markup(),
+    )
 
 
 def print_error(e, chat_id=0):
@@ -281,6 +411,27 @@ def register_handlers(bot):
         await bot.send_message(message.chat.id, "✅ Сообщение отправлено! Спасибо за обратную связь 💜", reply_markup=types.ReplyKeyboardRemove())
         del user_feedback[message.chat.id]
 
+    @bot.message_handler(commands=['settings'])
+    async def user_settings_cmd(message):
+        await _settings_flow(bot, message.chat.id, export_kwargs={})
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("set_dur:"))
+    async def handle_set_duration(call):
+        await bot.answer_callback_query(call.id)
+        await _settings_flow(bot, call.message.chat.id, call=call)
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("set_num:"))
+    async def handle_set_numbering(call):
+        await bot.answer_callback_query(call.id)
+        await _settings_flow(bot, call.message.chat.id, call=call)
+
+    async def _ensure_settings_then_export(chat_id: int, **export_kwargs):
+        settings = await db.get_user_settings(chat_id)
+        if settings["need_duration"] is None or settings["need_numbering"] is None:
+            await _settings_flow(bot, chat_id, export_kwargs=export_kwargs)
+            return
+        await export_playlist(bot, chat_id, **export_kwargs)
+
     # ── Login ─────────────────────────────────────────────────────────────────
 
     @bot.message_handler(commands=['login'])
@@ -364,7 +515,7 @@ def register_handlers(bot):
         await bot.answer_callback_query(call.id)
         _, kind, owner_uid = call.data.split(":")
         try:
-            await export_playlist(bot, call.message.chat.id, kind=int(kind), owner_uid=int(owner_uid))
+            await _ensure_settings_then_export(call.message.chat.id, kind=int(kind), owner_uid=int(owner_uid))
         except NotFoundError:
             log.warning(f"playlist not found [{call.message.chat.id}] kind={kind}")
             await bot.send_message(call.message.chat.id, "⚠️ Плейлист не найден")
@@ -387,7 +538,7 @@ def register_handlers(bot):
             return
 
         try:
-            await export_playlist(bot, message.chat.id, message=message)
+            await _ensure_settings_then_export(message.chat.id, message=message)
         except NotFoundError:
             log.warning(f"playlist not found [{message.chat.id}] {message.text}")
             await bot.reply_to(message, "⚠️ Плейлист не найден. Проверьте ссылку или убедитесь, что плейлист не удалён")
