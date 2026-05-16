@@ -122,6 +122,7 @@ async def _finish_export(chat_id: int, bot, filename: str):
         parse_mode="HTML",
     )
 
+    log.info(f"export success [{chat_id}] {filename}")
     await db.record_export(chat_id, filename)
 
     await asyncio.sleep(2)
