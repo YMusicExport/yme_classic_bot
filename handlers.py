@@ -27,18 +27,17 @@ async def _send_export_error(bot, message, e, bad_input_msg):
     if 'tracks' in error_str or 'artists' in error_str:
         await bot.reply_to(
             message,
-            "⚠️ К сожалению, Яндекс заблокировал экспорт этого плейлиста сейчас. Попробуйте чуть позже.\n\n"
-            "Дело в том, что бот работает без входа в аккаунт, и по этой причине Яндекс иногда запрещает "
-            "просматривать некоторые плейлисты (в основном «Любимое») таким образом.\n\n"
-            "💡 Если не хотите ждать, можно попробовать экспортировать плейлист, запустив скрипт на вашем ПК. "
-            "О том, как это сделать: https://teletype.in/@qleqs/yme"
+            "⚠️ Этот плейлист, вероятно, не получится экспортировать без авторизации. Войдите в аккаунт /login или запустите <a href='https://github.com/YMusicExport/YandexMusicExport'>скрипт у себя на устройстве</a>.",
+            parse_mode="HTML",
+            link_preview_options=types.LinkPreviewOptions(is_disabled=True)
         )
     elif any(kw in error_str for kw in ('ssl', 'connection', 'timeout', 'eof', 'max retries')):
         await bot.reply_to(
             message,
             "⚠️ Не удалось подключиться к Яндекс Музыке. Возможно, сервис временно недоступен.\n\n"
-            "💡 Попробуйте чуть позже или экспортируйте плейлист напрямую со своего ПК: "
-            "https://teletype.in/@qleqs/yme"
+            "Чтобы экспортировать плейлист, вы можете войте в аккаунт /login или запустить <a href='https://github.com/YMusicExport/YandexMusicExport'>скрипт у себя на устройстве</a>.",
+            parse_mode="HTML",
+            link_preview_options=types.LinkPreviewOptions(is_disabled=True)
         )
     else:
         await bot.reply_to(message, f"Ошибка! {bad_input_msg} Инструкция /start\n\nInfo: {e}")
@@ -374,4 +373,4 @@ def register_handlers(bot):
             await bot.reply_to(message, "⚠️ Плейлист не найден. Проверьте ссылку или убедитесь, что плейлист не удалён")
         except Exception as e:
             print_error(e, message.chat.id)
-            await _send_export_error(bot, message, e, "Проверьте правильность ссылки и попробуйте ещё раз")
+            await _send_export_error(bot, message, e, "Проверьте правильность ссылки и попробуйте ещё раз. Используйте /login для экспорта через ваш аккаунт Яндекс Музыки, если еще не вошли.")
