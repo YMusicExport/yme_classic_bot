@@ -317,7 +317,7 @@ def register_handlers(bot):
         token = await db.get_ym_token(chat_id)
         if not token:
             await bot.send_message(chat_id,
-                "🔍 Поиск по плейлистам доступен после авторизации. Используй /login чтобы войти в аккаунт Яндекс Музыки."
+                "🔍 Поиск по плейлистам доступен после авторизации. Используйте /login для входа в аккаунт Яндекс Музыки."
             )
             return
 
