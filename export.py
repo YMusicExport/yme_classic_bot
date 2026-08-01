@@ -19,6 +19,10 @@ RE_OLD_PLAYLIST_URL = re.compile(r"(https?://)?music\.yandex\.[a-z]{2,}/users/.+
 os.makedirs("exported", exist_ok=True)
 
 
+def _safe_title(title: str | None) -> str:
+    return re.sub(r"[^\w\s\-]", "", title or "playlist").strip()
+
+
 async def export_playlist(bot, chat_id: int, *, message=None, kind=None, owner_uid=None):
     token = await db.get_ym_token(chat_id)
     settings = await db.get_user_settings(chat_id)
@@ -75,7 +79,7 @@ async def _fetch_by_url_anon(playlist_uuid: str, chat_id: int, need_duration: bo
 
     data = response.json()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"exported/{data['title']}_{chat_id}_{timestamp}.txt"
+    filename = f"exported/{_safe_title(data['title'])}_{chat_id}_{timestamp}.txt"
     async with aiofiles.open(filename, "w", encoding="utf-8") as f:
         await f.write("\n".join(data["tracks"]) + "\n")
 
@@ -118,8 +122,7 @@ async def _playlist_to_file(playlist, chat_id: int, need_duration: bool, need_nu
         track_lines.append(line)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_title = re.sub(r"[^\w\s\-]", "", playlist.title or "playlist").strip()
-    filename = f"exported/{safe_title}_{chat_id}_{timestamp}.txt"
+    filename = f"exported/{_safe_title(playlist.title)}_{chat_id}_{timestamp}.txt"
     async with aiofiles.open(filename, "w", encoding="utf-8") as f:
         await f.write("\n".join(track_lines) + "\n")
 

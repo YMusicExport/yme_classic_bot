@@ -1,23 +1,30 @@
+import asyncio
 import secrets
 import aiosqlite
 from contextlib import asynccontextmanager
 from datetime import datetime
 from config import DB_FILE
 
+_db: aiosqlite.Connection | None = None
+_lock = asyncio.Lock()
+
 
 @asynccontextmanager
 async def _conn():
-    async with aiosqlite.connect(DB_FILE) as con:
-        con.row_factory = aiosqlite.Row
+    async with _lock:
         try:
-            yield con
-            await con.commit()
+            yield _db
+            await _db.commit()
         except Exception:
-            await con.rollback()
+            await _db.rollback()
             raise
 
 
 async def init_db():
+    global _db
+    _db = await aiosqlite.connect(DB_FILE)
+    _db.row_factory = aiosqlite.Row
+
     async with _conn() as con:
         await con.executescript("""
             CREATE TABLE IF NOT EXISTS users (
