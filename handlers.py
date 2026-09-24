@@ -15,6 +15,12 @@ RE_ADMIN_CHAT = re.compile(r"/chat\s+((?:\d+\s+)*\d+)\s+([\s\S]+)")
 RE_ADMIN_CHAT_ALL = re.compile(r"/chat_all\s+([\s\S]+)")
 RE_SET_PROMO = re.compile(r"/set_promo\s+([\s\S]+)")
 
+LIKES_KEYWORDS = (
+    "мне нравится", "нравится", "любимое", "любимые", "избранное",
+    "likes", "liked", "favourites", "favorites", "favourite", "favorite",
+)
+LIKES_PLAYLIST_KIND = 3
+
 user_feedback = {}
 _pending_dur: dict[int, int] = {}   # chat_id → need_duration ответ на шаге 1
 _pending_exp: dict[int, dict] = {}  # chat_id → export kwargs, ждущие настроек
@@ -412,9 +418,18 @@ def register_handlers(bot):
             return
 
         client = await ClientAsync(token).init()
-        playlists = await client.users_playlists_list()
 
-        q = query.lower()
+        q = query.lower().strip()
+        if any(kw in q for kw in LIKES_KEYWORDS):
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(types.InlineKeyboardButton(
+                "Мне нравится",
+                callback_data=f"pl:{LIKES_PLAYLIST_KIND}:{client.me.account.uid}"
+            ))
+            await bot.send_message(chat_id, "🔍 Найдено плейлистов: 1", reply_markup=markup)
+            return
+
+        playlists = await client.users_playlists_list()
         matches = [p for p in (playlists or []) if q in (p.title or '').lower()]
 
         if not matches:
