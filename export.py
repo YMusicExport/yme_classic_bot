@@ -153,5 +153,7 @@ async def _finish_export(chat_id: int, bot, filename: str):
     else:
         await bot.send_message(
             chat_id,
-            "Это бесплатный проект, который делает и поддерживает один человек. Если оказался полезным — буду рад поддержке 💜 https://aleqsanbr.dev",
+            "Вы также можете экспортировать все свои плейлисты и лайки разом на сайте YMusicExport.com!\n\n"
+            "Поддержать проект можно тут: https://yoomoney.ru/to/4100118478520818\n\n"
+            "Спасибо 💜",
         )
