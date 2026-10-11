@@ -1,15 +1,16 @@
 import asyncio
 import io
 import re
+import time
 from telebot import types
 from yandex_music import ClientAsync
-from yandex_music.exceptions import NotFoundError
+from yandex_music.exceptions import NotFoundError, YandexMusicError
 from config import ADMIN_ID
 from stats import get_stats
 from export import (
     export_playlist, playlist_api_primary, playlist_sources_configured, PlaylistApiError,
     PLAYLIST_API_PRIMARY_SETTING, PLAYLIST_SOURCES, SERVICE_TOKEN_SETTING,
-    RE_UUID_PLAYLIST, RE_OLD_PLAYLIST_URL,
+    RE_LIBRARY_STATUS, RE_UUID_PLAYLIST, RE_OLD_PLAYLIST_URL,
 )
 from promo import get_promo, set_promo, clear_promo
 from logger import log
@@ -80,6 +81,36 @@ async def _settings_flow(bot, chat_id: int, *, call=None, export_kwargs: dict | 
             call.message.message_id,
         )
         return _pending_exp.pop(chat_id, None)
+
+
+MAX_POLL_INTERVAL = 30
+
+
+async def _device_login(on_code) -> str:
+    """Device-code sign-in that waits out Yandex OAuth rate limits.
+
+    The library's device_auth gives up on the first 429 while polling; here a
+    429 only stretches the pause between polls. Returns the access token.
+    """
+    client = ClientAsync()
+    code = await client.request_device_code()
+    await on_code(code)
+
+    interval = code.interval
+    deadline = time.monotonic() + code.expires_in
+    while time.monotonic() < deadline:
+        await asyncio.sleep(interval)
+        try:
+            token = await client.poll_device_token(code.device_code)
+        except YandexMusicError as e:
+            status = RE_LIBRARY_STATUS.search(str(e))
+            if status and status.group(1) == "429":
+                interval = min(interval * 2, MAX_POLL_INTERVAL)
+                continue
+            raise
+        if token is not None:
+            return token.access_token
+    raise TimeoutError("код не подтвердили вовремя — запросите новый")
 
 
 def print_error(e, chat_id=0):
@@ -286,9 +317,9 @@ def register_handlers(bot):
             )
 
         try:
-            oauth = await ClientAsync().device_auth(on_code=on_code)
-            client = await ClientAsync(oauth.access_token).init()
-            await db.set_setting(SERVICE_TOKEN_SETTING, oauth.access_token)
+            token = await _device_login(on_code)
+            client = await ClientAsync(token).init()
+            await db.set_setting(SERVICE_TOKEN_SETTING, token)
             login = client.me.account.login if client.me and client.me.account else "?"
             log.info(f"service account set: {login}")
             await bot.send_message(chat_id, f"✅ Служебный аккаунт для экспорта по ссылке: <code>{login}</code>\n\nПорядок: /playlist_api", parse_mode="HTML")
@@ -495,9 +526,8 @@ def register_handlers(bot):
             await bot.send_message(chat_id, f"🔗 Откройте {code.verification_url} и введите код <code>{code.user_code}</code>", parse_mode="HTML")
 
         try:
-            client = ClientAsync()
-            oauth = await client.device_auth(on_code=on_code)
-            await db.set_ym_token(chat_id, oauth.access_token)
+            token = await _device_login(on_code)
+            await db.set_ym_token(chat_id, token)
             await bot.send_message(chat_id,
                 "✅ <b>Авторизация успешна</b>\n\n"
                 "Теперь все плейлисты будут экспортироваться напрямую через ваш аккаунт. Выход из аккаунта /logout",
