@@ -7,7 +7,8 @@ from yandex_music.exceptions import NotFoundError
 from config import ADMIN_ID
 from stats import get_stats
 from export import (
-    export_playlist, playlist_api_primary, PlaylistApiError, PLAYLIST_APIS, PLAYLIST_API_PRIMARY_SETTING,
+    export_playlist, playlist_api_primary, playlist_sources_configured, PlaylistApiError,
+    PLAYLIST_API_PRIMARY_SETTING, PLAYLIST_SOURCES, SERVICE_TOKEN_SETTING,
     RE_UUID_PLAYLIST, RE_OLD_PLAYLIST_URL,
 )
 from promo import get_promo, set_promo, clear_promo
@@ -18,7 +19,7 @@ RE_ADMIN_CHAT = re.compile(r"/chat\s+((?:\d+\s+)*\d+)\s+([\s\S]+)")
 RE_ADMIN_CHAT_ALL = re.compile(r"/chat_all\s+([\s\S]+)")
 RE_SET_PROMO = re.compile(r"/set_promo\s+([\s\S]+)")
 RE_PLAYLIST_API = re.compile(r"/playlist_api(?:\s+(\S+))?\s*$")
-PLAYLIST_API_NAMES = {"yandex": "Яндекс Облако", "cloudru": "Cloud.ru"}
+PLAYLIST_API_NAMES = {"yandex": "Яндекс Облако", "cloudru": "Cloud.ru", "account": "Служебный аккаунт"}
 
 LIKES_KEYWORDS = (
     "мне нравится", "нравится", "любимое", "любимые", "избранное",
@@ -242,27 +243,54 @@ def register_handlers(bot):
         await set_promo(text)
         await bot.send_message(message.chat.id, f"✅ Партнёрское сообщение установлено:\n\n{text}", parse_mode="HTML")
 
-    # /playlist_api — which link-export function goes first; /playlist_api yandex|cloudru switches it.
+    # /playlist_api — which source of export by link goes first; /playlist_api yandex|cloudru|account switches it.
     @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and RE_PLAYLIST_API.match(m.text or ""))
     async def admin_playlist_api(message):
         name = RE_PLAYLIST_API.match(message.text).group(1)
         if name is not None:
-            if name not in PLAYLIST_APIS:
-                await bot.send_message(message.chat.id, "Укажите <code>yandex</code> или <code>cloudru</code>.", parse_mode="HTML")
+            if name not in PLAYLIST_SOURCES:
+                await bot.send_message(message.chat.id, "Укажите <code>yandex</code>, <code>cloudru</code> или <code>account</code>.", parse_mode="HTML")
                 return
             await db.set_setting(PLAYLIST_API_PRIMARY_SETTING, name)
 
         primary = await playlist_api_primary()
+        configured = await playlist_sources_configured()
+        missing = {"account": "⚠️ токен не задан — /service_login"}
         lines = [
-            f"{'▶️' if key == primary else '↪️'} {PLAYLIST_API_NAMES[key]} (<code>{key}</code>): {'адрес задан' if url else '⚠️ адрес не задан'}"
-            for key, url in PLAYLIST_APIS.items()
+            f"{'▶️' if key == primary else '↪️'} {PLAYLIST_API_NAMES[key]} (<code>{key}</code>): "
+            + ("настроен" if configured[key] else missing.get(key, "⚠️ адрес не задан"))
+            for key in PLAYLIST_SOURCES
         ]
         await bot.send_message(
             message.chat.id,
-            f"<b>Экспорт по ссылке</b>\nОсновная: {PLAYLIST_API_NAMES[primary]}, вторая — фолбек.\n\n" + "\n".join(lines)
-            + "\n\nПереключить: <code>/playlist_api yandex</code> или <code>/playlist_api cloudru</code>",
+            f"<b>Экспорт по ссылке</b>\nОсновной: {PLAYLIST_API_NAMES[primary]}, остальные — фолбек по порядку.\n\n" + "\n".join(lines)
+            + "\n\nПереключить: <code>/playlist_api yandex</code>, <code>/playlist_api cloudru</code> или <code>/playlist_api account</code>",
             parse_mode="HTML",
         )
+
+    # /service_login — the service account for export by link: same device
+    # flow as /login, but the token goes to the settings table, not to the admin's chat.
+    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.text == '/service_login')
+    async def admin_service_login(message):
+        chat_id = message.chat.id
+
+        async def on_code(code):
+            await bot.send_message(
+                chat_id,
+                f"🔗 Откройте {code.verification_url}, войдите <b>служебным</b> аккаунтом и введите код <code>{code.user_code}</code>",
+                parse_mode="HTML",
+            )
+
+        try:
+            oauth = await ClientAsync().device_auth(on_code=on_code)
+            client = await ClientAsync(oauth.access_token).init()
+            await db.set_setting(SERVICE_TOKEN_SETTING, oauth.access_token)
+            login = client.me.account.login if client.me and client.me.account else "?"
+            log.info(f"service account set: {login}")
+            await bot.send_message(chat_id, f"✅ Служебный аккаунт для экспорта по ссылке: <code>{login}</code>\n\nПорядок: /playlist_api", parse_mode="HTML")
+        except Exception as e:
+            log.error(f"service login error: {e}")
+            await bot.send_message(chat_id, f"❌ Не удалось войти служебным аккаунтом: {e}")
 
     @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.text == '/clear_promo')
     async def admin_clear_promo(message):

@@ -25,7 +25,9 @@ PLAYLIST_API_URL=your_playlist_api_url
 PLAYLIST_API_CLOUDRU_URL=optional_second_playlist_api_url
 ```
 
-Two copies of the playlist API (Yandex Cloud and Cloud.ru): one goes first, the other is the fallback when it fails. The admin picks the first with `/playlist_api yandex|cloudru`.
+Export by link has three sources: two copies of the playlist API (Yandex Cloud and Cloud.ru) and a service Yandex account the bot asks directly. One goes first, the others are fallbacks in order. Admin commands:
+- `/playlist_api` — status; `/playlist_api yandex|cloudru|account` picks the first source;
+- `/service_login` — signs the service account in (device code, like `/login`); its token is kept in the bot's database.
 
 Run:
 ```bash

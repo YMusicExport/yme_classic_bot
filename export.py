@@ -6,7 +6,7 @@ from datetime import datetime
 import aiofiles
 import requests
 from yandex_music import ClientAsync
-from yandex_music.exceptions import NotFoundError
+from yandex_music.exceptions import NotFoundError, UnauthorizedError, YandexMusicError
 
 import db
 from config import PLAYLIST_API_CLOUDRU_URL, PLAYLIST_API_URL
@@ -66,8 +66,15 @@ async def export_playlist(bot, chat_id: int, *, message=None, kind=None, owner_u
     await _finish_export(chat_id, bot, filename)
 
 
+# Sources for export by link, tried in order, primary first: copies of the
+# playlist function in Yandex Cloud and Cloud.ru, and "account" — a request
+# straight from the bot with a service account's token (Yandex serves
+# anonymous requests only to Russian addresses; a Russian account's token
+# works from anywhere). The admin sets the token with /service_login.
 PLAYLIST_APIS = {"yandex": PLAYLIST_API_URL, "cloudru": PLAYLIST_API_CLOUDRU_URL}
+PLAYLIST_SOURCES = (*PLAYLIST_APIS, "account")
 PLAYLIST_API_PRIMARY_SETTING = "playlist_api_primary"
+SERVICE_TOKEN_SETTING = "playlist_service_token"
 # Big playlists take a function 5–10 s to read. Connecting gets less: a dead
 # primary should hand over to the fallback quickly.
 PRIMARY_CONNECT_TIMEOUT = 4
@@ -84,6 +91,10 @@ RE_UPSTREAM_STATUS = re.compile(r"\AHTTP Error (\d{3})\b")
 UPSTREAM_KINDS = {404: "not_found", 403: "not_found", 429: "busy", 451: "region"}
 # The other function would answer the same.
 FINAL_KINDS = {"not_found", "bad_link"}
+# yandex_music raises NotFoundError for 404 and UnauthorizedError for
+# 401/403; any other status only appears in a NetworkError's message, as
+# "(<status>)" in the library's own fixed format.
+RE_LIBRARY_STATUS = re.compile(r"\((\d{3})\)")
 
 
 class PlaylistApiError(Exception):
@@ -96,12 +107,18 @@ class PlaylistApiError(Exception):
 
 async def playlist_api_primary() -> str:
     name = await db.get_setting(PLAYLIST_API_PRIMARY_SETTING, "yandex")
-    return name if name in PLAYLIST_APIS else "yandex"
+    return name if name in PLAYLIST_SOURCES else "yandex"
+
+
+async def playlist_sources_configured() -> dict[str, bool]:
+    service_token = await db.get_setting(SERVICE_TOKEN_SETTING)
+    return {name: bool(service_token) if name == "account" else bool(PLAYLIST_APIS[name]) for name in PLAYLIST_SOURCES}
 
 
 async def _playlist_api_order() -> list[str]:
     primary = await playlist_api_primary()
-    return [name for name in (primary, *(n for n in PLAYLIST_APIS if n != primary)) if PLAYLIST_APIS[name]]
+    configured = await playlist_sources_configured()
+    return [name for name in (primary, *(n for n in PLAYLIST_SOURCES if n != primary)) if configured[name]]
 
 
 # The playlist function (shared with the website) returns
@@ -137,6 +154,9 @@ async def _fetch_by_url_anon(playlist_uuid: str, chat_id: int, need_duration: bo
 
 
 async def _request_playlist(name: str, playlist_uuid: str, connect_timeout: int) -> dict:
+    if name == "account":
+        return await _request_with_service_account(playlist_uuid)
+
     try:
         response = await asyncio.to_thread(
             requests.get, PLAYLIST_APIS[name], params={"uuid": playlist_uuid}, timeout=(connect_timeout, READ_TIMEOUT)
@@ -161,6 +181,33 @@ async def _request_playlist(name: str, playlist_uuid: str, connect_timeout: int)
 
     upstream = RE_UPSTREAM_STATUS.match(function_error)
     raise PlaylistApiError(UPSTREAM_KINDS.get(int(upstream.group(1)), "down") if upstream else "down", detail)
+
+
+# Same shape as the playlist function's answer. A dead service token
+# (UnauthorizedError) is the platform failing for the user, not their playlist.
+async def _request_with_service_account(playlist_uuid: str) -> dict:
+    token = await db.get_setting(SERVICE_TOKEN_SETTING)
+    try:
+        client = await ClientAsync(token).init()
+        playlist = await client.playlist(playlist_uuid)
+    except NotFoundError as e:
+        raise PlaylistApiError("not_found", f"service account: {e}") from e
+    except UnauthorizedError as e:
+        raise PlaylistApiError("down", f"service account token rejected: {e}") from e
+    except YandexMusicError as e:
+        status = RE_LIBRARY_STATUS.search(str(e))
+        raise PlaylistApiError(UPSTREAM_KINDS.get(int(status.group(1)), "down") if status else "down", f"service account: {str(e)[:200]}") from e
+
+    if not playlist:
+        raise PlaylistApiError("not_found", "service account: no playlist")
+    tracks = []
+    for ts in playlist.tracks or []:
+        track = ts.track
+        if track is None:
+            continue
+        title = f"{track.title} ({track.version})" if track.version else track.title
+        tracks.append({"artist": ", ".join(a.name for a in (track.artists or [])), "title": title, "durationMs": track.duration_ms})
+    return {"title": playlist.title, "tracks": tracks}
 
 
 async def _fetch_by_url_api(playlist_uuid: str, token: str, chat_id: int, need_duration: bool, need_numbering: bool) -> str:
