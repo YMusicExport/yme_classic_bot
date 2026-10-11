@@ -6,7 +6,10 @@ from yandex_music import ClientAsync
 from yandex_music.exceptions import NotFoundError
 from config import ADMIN_ID
 from stats import get_stats
-from export import export_playlist, playlist_api_primary, PLAYLIST_APIS, PLAYLIST_API_PRIMARY_SETTING, RE_UUID_PLAYLIST, RE_OLD_PLAYLIST_URL
+from export import (
+    export_playlist, playlist_api_primary, PlaylistApiError, PLAYLIST_APIS, PLAYLIST_API_PRIMARY_SETTING,
+    RE_UUID_PLAYLIST, RE_OLD_PLAYLIST_URL,
+)
 from promo import get_promo, set_promo, clear_promo
 from logger import log
 import db
@@ -82,30 +85,34 @@ def print_error(e, chat_id=0):
     log.error(f"[{chat_id}] {e}")
 
 
-# Matched on how the status appears in the message ("(451)" from yandex_music,
-# "HTTP Error 429" / "HTTP 429:" from the playlist function), not a bare
-# number — playlist UUIDs in URLs contain digits too.
-RE_UNAVAILABLE = re.compile(r"\(451\)|(?:error|http) 451|unavailable for legal")
-RE_RATE_LIMITED = re.compile(r"\(429\)|(?:error|http) 429|too many requests|concurrency limit")
-NETWORK_KEYWORDS = (
-    'ssl', 'connection', 'timeout', 'timed out', 'eof', 'max retries',
-    'bad gateway', 'service unavailable', 'gateway timeout',
-)
 EXPORT_ALTERNATIVES = (
-    "Чтобы экспортировать плейлист, вы можете войти в аккаунт /login или запустить "
+    "Чтобы экспортировать плейлист, вы можете войти в аккаунт /login — тогда плейлист берётся напрямую "
+    "из вашего аккаунта — или запустить "
     "<a href='https://github.com/YMusicExport/YandexMusicExport'>скрипт у себя на устройстве</a>."
 )
+SERVICE_ERROR_TEXTS = {
+    "region": f"⚠️ Яндекс Музыка недоступна для этого аккаунта или региона.\n\n{EXPORT_ALTERNATIVES}",
+    "busy": f"⚠️ Яндекс Музыка сейчас перегружена или ограничила запросы. Попробуйте ещё раз через пару минут.\n\n{EXPORT_ALTERNATIVES}",
+    "down": f"⚠️ Не удалось подключиться к Яндекс Музыке. Возможно, сервис временно недоступен.\n\n{EXPORT_ALTERNATIVES}",
+}
+# yandex_music (signed-in exports) reports the status only inside its message,
+# as "(451)" / "(429)"; requests' connection errors have no status at all.
+RE_LIBRARY_STATUS = re.compile(r"\((\d{3})\)")
+LIBRARY_KINDS = {451: "region", 429: "busy"}
+NETWORK_KEYWORDS = ('ssl', 'connection', 'timeout', 'timed out', 'eof', 'max retries')
 
 
 def _service_error_text(e) -> str | None:
     """A message for errors on Yandex's side, where the user's link is fine."""
+    if isinstance(e, PlaylistApiError):
+        return SERVICE_ERROR_TEXTS.get(e.kind)
+
     error_str = str(e).lower()
-    if RE_UNAVAILABLE.search(error_str):
-        return "⚠️ Яндекс Музыка недоступна для этого аккаунта или региона."
-    if RE_RATE_LIMITED.search(error_str):
-        return "⚠️ Яндекс Музыка сейчас перегружена или ограничила запросы. Попробуйте ещё раз через пару минут."
+    status = RE_LIBRARY_STATUS.search(error_str)
+    if status and int(status.group(1)) in LIBRARY_KINDS:
+        return SERVICE_ERROR_TEXTS[LIBRARY_KINDS[int(status.group(1))]]
     if any(kw in error_str for kw in NETWORK_KEYWORDS):
-        return f"⚠️ Не удалось подключиться к Яндекс Музыке. Возможно, сервис временно недоступен.\n\n{EXPORT_ALTERNATIVES}"
+        return SERVICE_ERROR_TEXTS["down"]
     return None
 
 
