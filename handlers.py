@@ -33,7 +33,8 @@ async def _settings_flow(bot, chat_id: int, *, call=None, export_kwargs: dict | 
 
     Старт флоу: вызвать с export_kwargs (None = /settings без экспорта).
     Шаг 1 → 2: вызвать с call, data начинается на 'set_dur:'.
-    Шаг 2 → сохранение + экспорт: вызвать с call, data начинается на 'set_num:'.
+    Шаг 2 → сохранение: вызвать с call, data начинается на 'set_num:'; возвращает
+    kwargs отложенного экспорта (если был), запускает его вызывающий.
     """
     if export_kwargs is not None:
         if export_kwargs:
@@ -74,9 +75,7 @@ async def _settings_flow(bot, chat_id: int, *, call=None, export_kwargs: dict | 
             chat_id,
             call.message.message_id,
         )
-        kwargs = _pending_exp.pop(chat_id, None)
-        if kwargs:
-            await export_playlist(bot, chat_id, **kwargs)
+        return _pending_exp.pop(chat_id, None)
 
 
 def print_error(e, chat_id=0):
@@ -88,7 +87,10 @@ def print_error(e, chat_id=0):
 # number — playlist UUIDs in URLs contain digits too.
 RE_UNAVAILABLE = re.compile(r"\(451\)|(?:error|http) 451|unavailable for legal")
 RE_RATE_LIMITED = re.compile(r"\(429\)|(?:error|http) 429|too many requests|concurrency limit")
-NETWORK_KEYWORDS = ('ssl', 'connection', 'timeout', 'timed out', 'eof', 'max retries')
+NETWORK_KEYWORDS = (
+    'ssl', 'connection', 'timeout', 'timed out', 'eof', 'max retries',
+    'bad gateway', 'service unavailable', 'gateway timeout',
+)
 EXPORT_ALTERNATIVES = (
     "Чтобы экспортировать плейлист, вы можете войти в аккаунт /login или запустить "
     "<a href='https://github.com/YMusicExport/YandexMusicExport'>скрипт у себя на устройстве</a>."
@@ -395,7 +397,10 @@ def register_handlers(bot):
     @bot.callback_query_handler(func=lambda c: c.data.startswith("set_num:"))
     async def handle_set_numbering(call):
         await bot.answer_callback_query(call.id)
-        await _settings_flow(bot, call.message.chat.id, call=call)
+        chat_id = call.message.chat.id
+        kwargs = await _settings_flow(bot, chat_id, call=call)
+        if kwargs:
+            await _reporting_export_errors(chat_id, kwargs, lambda: export_playlist(bot, chat_id, **kwargs))
 
     async def _ensure_settings_then_export(chat_id: int, **export_kwargs):
         settings = await db.get_user_settings(chat_id)
@@ -403,6 +408,32 @@ def register_handlers(bot):
             await _settings_flow(bot, chat_id, export_kwargs=export_kwargs)
             return
         await export_playlist(bot, chat_id, **export_kwargs)
+
+    # Every way an export starts (link, search result, right after the first
+    # settings) goes through here, so a failure always reaches the user.
+    async def _reporting_export_errors(chat_id: int, export_kwargs: dict, run):
+        message = export_kwargs.get("message")
+        source = f"message: {message.text}" if message else f"kind: {export_kwargs.get('kind')}\nowner_uid: {export_kwargs.get('owner_uid')}"
+        try:
+            await run()
+        except NotFoundError:
+            log.warning(f"playlist not found [{chat_id}] {source}")
+            if message:
+                await bot.reply_to(message, "⚠️ Плейлист не найден. Проверьте ссылку или убедитесь, что плейлист не удалён")
+            else:
+                await bot.send_message(chat_id, "⚠️ Плейлист не найден")
+        except Exception as e:
+            print_error(e, chat_id)
+            logged_in = bool(await db.get_ym_token(chat_id))
+            error_id = await db.save_error(chat_id, str(e), f"{source}\nlogged_in: {logged_in}")
+            if message:
+                await _send_export_error(bot, message, e, "Проверьте правильность ссылки и попробуйте ещё раз.", _error_id=error_id)
+                return
+            service_error = _service_error_text(e)
+            if service_error:
+                await bot.send_message(chat_id, service_error, parse_mode="HTML", link_preview_options=types.LinkPreviewOptions(is_disabled=True))
+            else:
+                await bot.send_message(chat_id, f"❌ Ошибка экспорта. Код: <code>{error_id}</code>", parse_mode="HTML")
 
     # ── Login ─────────────────────────────────────────────────────────────────
 
@@ -495,21 +526,9 @@ def register_handlers(bot):
     async def handle_playlist_callback(call):
         await bot.answer_callback_query(call.id)
         _, kind, owner_uid = call.data.split(":")
-        try:
-            await _ensure_settings_then_export(call.message.chat.id, kind=int(kind), owner_uid=int(owner_uid))
-        except NotFoundError:
-            log.warning(f"playlist not found [{call.message.chat.id}] kind={kind}")
-            await bot.send_message(call.message.chat.id, "⚠️ Плейлист не найден")
-        except Exception as e:
-            print_error(e, call.message.chat.id)
-            logged_in = bool(await db.get_ym_token(call.message.chat.id))
-            context = f"kind: {kind}\nowner_uid: {owner_uid}\nlogged_in: {logged_in}"
-            error_id = await db.save_error(call.message.chat.id, str(e), context)
-            service_error = _service_error_text(e)
-            if service_error:
-                await bot.send_message(call.message.chat.id, service_error, parse_mode="HTML", link_preview_options=types.LinkPreviewOptions(is_disabled=True))
-            else:
-                await bot.send_message(call.message.chat.id, f"❌ Ошибка экспорта. Код: <code>{error_id}</code>", parse_mode="HTML")
+        chat_id = call.message.chat.id
+        kwargs = {"kind": int(kind), "owner_uid": int(owner_uid)}
+        await _reporting_export_errors(chat_id, kwargs, lambda: _ensure_settings_then_export(chat_id, **kwargs))
 
     # ── Export ────────────────────────────────────────────────────────────────
 
@@ -522,14 +541,6 @@ def register_handlers(bot):
             await _do_search(message.chat.id, text)
             return
 
-        try:
-            await _ensure_settings_then_export(message.chat.id, message=message)
-        except NotFoundError:
-            log.warning(f"playlist not found [{message.chat.id}] {message.text}")
-            await bot.reply_to(message, "⚠️ Плейлист не найден. Проверьте ссылку или убедитесь, что плейлист не удалён")
-        except Exception as e:
-            print_error(e, message.chat.id)
-            logged_in = bool(await db.get_ym_token(message.chat.id))
-            context = f"message: {message.text}\nlogged_in: {logged_in}"
-            error_id = await db.save_error(message.chat.id, str(e), context)
-            await _send_export_error(bot, message, e, "Проверьте правильность ссылки и попробуйте ещё раз.", _error_id=error_id)
+        await _reporting_export_errors(
+            message.chat.id, {"message": message}, lambda: _ensure_settings_then_export(message.chat.id, message=message)
+        )
