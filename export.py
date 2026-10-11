@@ -117,7 +117,11 @@ async def _fetch_by_url_anon(playlist_uuid: str, chat_id: int, need_duration: bo
     if not failures:
         raise PlaylistApiError("no playlist function configured")
     # A function that answered knows more than one that didn't connect.
-    raise next((e for e in failures if not isinstance(e, requests.RequestException)), failures[-1])
+    error = next((e for e in failures if not isinstance(e, requests.RequestException)), failures[-1])
+    # Missing or private playlist: the handlers' "not found" message, not an error report.
+    if RE_FINAL_ERROR.search(str(error)):
+        raise NotFoundError(str(error)) from error
+    raise error
 
 
 async def _request_playlist(name: str, playlist_uuid: str, connect_timeout: int) -> dict:
