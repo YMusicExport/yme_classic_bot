@@ -6,7 +6,7 @@ from yandex_music import ClientAsync
 from yandex_music.exceptions import NotFoundError
 from config import ADMIN_ID
 from stats import get_stats
-from export import export_playlist, RE_UUID_PLAYLIST, RE_OLD_PLAYLIST_URL
+from export import export_playlist, playlist_api_primary, PLAYLIST_APIS, PLAYLIST_API_PRIMARY_SETTING, RE_UUID_PLAYLIST, RE_OLD_PLAYLIST_URL
 from promo import get_promo, set_promo, clear_promo
 from logger import log
 import db
@@ -14,6 +14,8 @@ import db
 RE_ADMIN_CHAT = re.compile(r"/chat\s+((?:\d+\s+)*\d+)\s+([\s\S]+)")
 RE_ADMIN_CHAT_ALL = re.compile(r"/chat_all\s+([\s\S]+)")
 RE_SET_PROMO = re.compile(r"/set_promo\s+([\s\S]+)")
+RE_PLAYLIST_API = re.compile(r"/playlist_api(?:\s+(\S+))?\s*$")
+PLAYLIST_API_NAMES = {"yandex": "Яндекс Облако", "cloudru": "Cloud.ru"}
 
 LIKES_KEYWORDS = (
     "мне нравится", "нравится", "любимое", "любимые", "избранное",
@@ -81,20 +83,39 @@ def print_error(e, chat_id=0):
     log.error(f"[{chat_id}] {e}")
 
 
+# Matched on how the status appears in the message ("(451)" from yandex_music,
+# "HTTP Error 429" / "HTTP 429:" from the playlist function), not a bare
+# number — playlist UUIDs in URLs contain digits too.
+RE_UNAVAILABLE = re.compile(r"\(451\)|(?:error|http) 451|unavailable for legal")
+RE_RATE_LIMITED = re.compile(r"\(429\)|(?:error|http) 429|too many requests|concurrency limit")
+NETWORK_KEYWORDS = ('ssl', 'connection', 'timeout', 'timed out', 'eof', 'max retries')
+EXPORT_ALTERNATIVES = (
+    "Чтобы экспортировать плейлист, вы можете войти в аккаунт /login или запустить "
+    "<a href='https://github.com/YMusicExport/YandexMusicExport'>скрипт у себя на устройстве</a>."
+)
+
+
+def _service_error_text(e) -> str | None:
+    """A message for errors on Yandex's side, where the user's link is fine."""
+    error_str = str(e).lower()
+    if RE_UNAVAILABLE.search(error_str):
+        return "⚠️ Яндекс Музыка недоступна для этого аккаунта или региона."
+    if RE_RATE_LIMITED.search(error_str):
+        return "⚠️ Яндекс Музыка сейчас перегружена или ограничила запросы. Попробуйте ещё раз через пару минут."
+    if any(kw in error_str for kw in NETWORK_KEYWORDS):
+        return f"⚠️ Не удалось подключиться к Яндекс Музыке. Возможно, сервис временно недоступен.\n\n{EXPORT_ALTERNATIVES}"
+    return None
+
+
 async def _send_export_error(bot, message, e, bad_input_msg, _error_id: str = ""):
     error_str = str(e).lower()
-    if 'tracks' in error_str or 'artists' in error_str:
+    service_error = _service_error_text(e)
+    if service_error:
+        await bot.reply_to(message, service_error, parse_mode="HTML", link_preview_options=types.LinkPreviewOptions(is_disabled=True))
+    elif 'tracks' in error_str or 'artists' in error_str:
         await bot.reply_to(
             message,
             "⚠️ Этот плейлист, вероятно, не получится экспортировать без авторизации. Войдите в аккаунт /login или запустите <a href='https://github.com/YMusicExport/YandexMusicExport'>скрипт у себя на устройстве</a>.",
-            parse_mode="HTML",
-            link_preview_options=types.LinkPreviewOptions(is_disabled=True)
-        )
-    elif any(kw in error_str for kw in ('ssl', 'connection', 'timeout', 'eof', 'max retries')):
-        await bot.reply_to(
-            message,
-            "⚠️ Не удалось подключиться к Яндекс Музыке. Возможно, сервис временно недоступен.\n\n"
-            "Чтобы экспортировать плейлист, вы можете войте в аккаунт /login или запустить <a href='https://github.com/YMusicExport/YandexMusicExport'>скрипт у себя на устройстве</a>.",
             parse_mode="HTML",
             link_preview_options=types.LinkPreviewOptions(is_disabled=True)
         )
@@ -211,6 +232,28 @@ def register_handlers(bot):
         text = RE_SET_PROMO.match(message.text).group(1).strip()
         await set_promo(text)
         await bot.send_message(message.chat.id, f"✅ Партнёрское сообщение установлено:\n\n{text}", parse_mode="HTML")
+
+    # /playlist_api — which link-export function goes first; /playlist_api yandex|cloudru switches it.
+    @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and RE_PLAYLIST_API.match(m.text or ""))
+    async def admin_playlist_api(message):
+        name = RE_PLAYLIST_API.match(message.text).group(1)
+        if name is not None:
+            if name not in PLAYLIST_APIS:
+                await bot.send_message(message.chat.id, "Укажите <code>yandex</code> или <code>cloudru</code>.", parse_mode="HTML")
+                return
+            await db.set_setting(PLAYLIST_API_PRIMARY_SETTING, name)
+
+        primary = await playlist_api_primary()
+        lines = [
+            f"{'▶️' if key == primary else '↪️'} {PLAYLIST_API_NAMES[key]} (<code>{key}</code>): {'адрес задан' if url else '⚠️ адрес не задан'}"
+            for key, url in PLAYLIST_APIS.items()
+        ]
+        await bot.send_message(
+            message.chat.id,
+            f"<b>Экспорт по ссылке</b>\nОсновная: {PLAYLIST_API_NAMES[primary]}, вторая — фолбек.\n\n" + "\n".join(lines)
+            + "\n\nПереключить: <code>/playlist_api yandex</code> или <code>/playlist_api cloudru</code>",
+            parse_mode="HTML",
+        )
 
     @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.text == '/clear_promo')
     async def admin_clear_promo(message):
@@ -462,7 +505,11 @@ def register_handlers(bot):
             logged_in = bool(await db.get_ym_token(call.message.chat.id))
             context = f"kind: {kind}\nowner_uid: {owner_uid}\nlogged_in: {logged_in}"
             error_id = await db.save_error(call.message.chat.id, str(e), context)
-            await bot.send_message(call.message.chat.id, f"❌ Ошибка экспорта. Код: <code>{error_id}</code>", parse_mode="HTML")
+            service_error = _service_error_text(e)
+            if service_error:
+                await bot.send_message(call.message.chat.id, service_error, parse_mode="HTML", link_preview_options=types.LinkPreviewOptions(is_disabled=True))
+            else:
+                await bot.send_message(call.message.chat.id, f"❌ Ошибка экспорта. Код: <code>{error_id}</code>", parse_mode="HTML")
 
     # ── Export ────────────────────────────────────────────────────────────────
 

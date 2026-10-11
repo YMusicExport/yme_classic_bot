@@ -5,7 +5,10 @@ load_dotenv()
 
 TOKEN = os.environ['TOKEN']
 ADMIN_ID = int(os.environ['ADMIN_ID'])
+# Playlist-by-link function, two copies with the same interface: Yandex Cloud
+# and Cloud.ru. Which goes first is switched with /playlist_api.
 PLAYLIST_API_URL = os.environ['PLAYLIST_API_URL']
+PLAYLIST_API_CLOUDRU_URL = os.environ.get('PLAYLIST_API_CLOUDRU_URL', '')
 
 EXPORT_LOG = 'export_log.json'
 IDS_FILE = 'ids_yme.txt'

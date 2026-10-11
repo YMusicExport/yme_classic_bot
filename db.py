@@ -49,6 +49,10 @@ async def init_db():
                 message    TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            );
             PRAGMA journal_mode=WAL;
         """)
         for col in ("ym_token TEXT", "need_duration INTEGER", "need_numbering INTEGER"):
@@ -212,3 +216,21 @@ async def get_error(error_id: str) -> dict | None:
         )
         row = await rows.fetchone()
     return dict(row) if row else None
+
+
+# ── Settings ───────────────────────────────────────────────────────────────────
+# Switches the admin changes from Telegram at runtime (unlike .env).
+
+async def get_setting(key: str, default: str | None = None) -> str | None:
+    async with _conn() as con:
+        rows = await con.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = await rows.fetchone()
+    return row["value"] if row else default
+
+
+async def set_setting(key: str, value: str):
+    async with _conn() as con:
+        await con.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value)
+        )

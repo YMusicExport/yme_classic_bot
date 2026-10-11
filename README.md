@@ -22,7 +22,10 @@ Create a `.env` file:
 TOKEN=your_bot_token
 ADMIN_ID=your_telegram_id
 PLAYLIST_API_URL=your_playlist_api_url
+PLAYLIST_API_CLOUDRU_URL=optional_second_playlist_api_url
 ```
+
+Two copies of the playlist API (Yandex Cloud and Cloud.ru): one goes first, the other is the fallback when it fails. The admin picks the first with `/playlist_api yandex|cloudru`.
 
 Run:
 ```bash

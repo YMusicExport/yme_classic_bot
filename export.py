@@ -9,7 +9,7 @@ from yandex_music import ClientAsync
 from yandex_music.exceptions import NotFoundError
 
 import db
-from config import PLAYLIST_API_URL
+from config import PLAYLIST_API_CLOUDRU_URL, PLAYLIST_API_URL
 from logger import log
 from promo import get_promo
 
@@ -66,24 +66,72 @@ async def export_playlist(bot, chat_id: int, *, message=None, kind=None, owner_u
     await _finish_export(chat_id, bot, filename)
 
 
+PLAYLIST_APIS = {"yandex": PLAYLIST_API_URL, "cloudru": PLAYLIST_API_CLOUDRU_URL}
+PLAYLIST_API_PRIMARY_SETTING = "playlist_api_primary"
+# Big playlists take a function 5–10 s to read. Connecting gets less: a dead
+# primary should hand over to the fallback quickly.
+PRIMARY_CONNECT_TIMEOUT = 4
+CONNECT_TIMEOUT = 10
+READ_TIMEOUT = 60
+# The playlist itself is missing or private — the other function would
+# answer the same.
+RE_FINAL_ERROR = re.compile(r"404|not found", re.IGNORECASE)
+
+
+class PlaylistApiError(Exception):
+    """The playlist function refused; the message carries its own error text."""
+
+
+async def playlist_api_primary() -> str:
+    name = await db.get_setting(PLAYLIST_API_PRIMARY_SETTING, "yandex")
+    return name if name in PLAYLIST_APIS else "yandex"
+
+
+async def _playlist_api_order() -> list[str]:
+    primary = await playlist_api_primary()
+    return [name for name in (primary, *(n for n in PLAYLIST_APIS if n != primary)) if PLAYLIST_APIS[name]]
+
+
+# The playlist function (shared with the website) returns
+# {title, tracks: [{artist, title, durationMs}]}; formatting is ours. The
+# primary function goes first, the other one if it fails on its side.
 async def _fetch_by_url_anon(playlist_uuid: str, chat_id: int, need_duration: bool, need_numbering: bool) -> str:
-    url = (
-        f"{PLAYLIST_API_URL}?uuid={playlist_uuid}"
-        f"&duration={1 if need_duration else 0}"
-        f"&numbering={1 if need_numbering else 0}"
+    names = await _playlist_api_order()
+    failures = []
+    for i, name in enumerate(names):
+        last = i == len(names) - 1
+        try:
+            data = await _request_playlist(name, playlist_uuid, PRIMARY_CONNECT_TIMEOUT if not last else CONNECT_TIMEOUT)
+        except (PlaylistApiError, requests.RequestException, ValueError) as e:
+            log.warning(f"anon fetch [{chat_id}] {name} failed: {e}")
+            failures.append(e)
+            if RE_FINAL_ERROR.search(str(e)):
+                break
+            continue
+
+        if i > 0:
+            log.info(f"anon fetch [{chat_id}] served by fallback {name}")
+        tracks = [(t["artist"], t["title"], t.get("durationMs")) for t in data["tracks"]]
+        return await _write_tracks(data["title"], tracks, chat_id, need_duration, need_numbering)
+
+    if not failures:
+        raise PlaylistApiError("no playlist function configured")
+    # A function that answered knows more than one that didn't connect.
+    raise next((e for e in failures if not isinstance(e, requests.RequestException)), failures[-1])
+
+
+async def _request_playlist(name: str, playlist_uuid: str, connect_timeout: int) -> dict:
+    response = await asyncio.to_thread(
+        requests.get, PLAYLIST_APIS[name], params={"uuid": playlist_uuid}, timeout=(connect_timeout, READ_TIMEOUT)
     )
-    response = await asyncio.to_thread(requests.get, url)
     if not response.ok:
-        log.error(f"anon fetch [{chat_id}] HTTP {response.status_code}: {response.text[:300]}")
-    response.raise_for_status()
+        try:
+            detail = response.json().get("error") or response.text
+        except ValueError:
+            detail = response.text
+        raise PlaylistApiError(f"HTTP {response.status_code}: {detail[:300]}")
 
-    data = response.json()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"exported/{_safe_title(data['title'])}_{chat_id}_{timestamp}.txt"
-    async with aiofiles.open(filename, "w", encoding="utf-8") as f:
-        await f.write("\n".join(data["tracks"]) + "\n")
-
-    return filename
+    return response.json()
 
 
 async def _fetch_by_url_api(playlist_uuid: str, token: str, chat_id: int, need_duration: bool, need_numbering: bool) -> str:
@@ -107,22 +155,32 @@ async def _fetch_by_kind(kind: int, owner_uid: int, token: str, chat_id: int, ne
 
 
 async def _playlist_to_file(playlist, chat_id: int, need_duration: bool, need_numbering: bool) -> str:
-    track_lines = []
-    for i, ts in enumerate(playlist.tracks or [], 1):
+    tracks = []
+    for ts in playlist.tracks or []:
         track = ts.track
         if track is None:
             continue
         artists = ", ".join(a.name for a in (track.artists or []))
-        line = f"{artists} - {track.title}"
+        # "Title (version)" — Live / Cover / Remastered, same as the website.
+        title = f"{track.title} ({track.version})" if track.version else track.title
+        tracks.append((artists, title, track.duration_ms))
+
+    return await _write_tracks(playlist.title, tracks, chat_id, need_duration, need_numbering)
+
+
+async def _write_tracks(playlist_title: str | None, tracks: list, chat_id: int, need_duration: bool, need_numbering: bool) -> str:
+    track_lines = []
+    for i, (artists, title, duration_ms) in enumerate(tracks, 1):
+        line = f"{artists} - {title}"
         if need_duration:
-            dur_s = (track.duration_ms or 0) // 1000
+            dur_s = (duration_ms or 0) // 1000
             line += f" [{dur_s // 60}:{dur_s % 60:02d}]"
         if need_numbering:
             line = f"{i}. {line}"
         track_lines.append(line)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"exported/{_safe_title(playlist.title)}_{chat_id}_{timestamp}.txt"
+    filename = f"exported/{_safe_title(playlist_title)}_{chat_id}_{timestamp}.txt"
     async with aiofiles.open(filename, "w", encoding="utf-8") as f:
         await f.write("\n".join(track_lines) + "\n")
 
